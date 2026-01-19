@@ -5,6 +5,7 @@ __pycache__/
 *.pyd
 .venv/
 venv/
+env/
 
 # Node / Front
 node_modules/
@@ -25,3 +26,16 @@ Thumbs.db
 # 음원
 .wav
 .mp3
+
+# Job outputs
+data/
+outputs/
+tmp/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+logs/
