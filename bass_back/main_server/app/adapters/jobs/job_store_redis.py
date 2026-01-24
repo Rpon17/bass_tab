@@ -1,185 +1,199 @@
 # adapters/jobs/job_store_redis.py
 from __future__ import annotations
 
-import json
-import time
-from dataclasses import replace
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from redis.asyncio import Redis
 
-from application.ports.job_store import JobStore, JobSnapshot
+from bass_back.main_server.app.application.ports.job_store_port import JobStore
+from bass_back.main_server.app.domain.jobs_domain import Job, JobStatus
 
+# ------------------------------------------------------------
+# Redis 락 해제: token이 맞을 때만 삭제 (원자적)
+# ------------------------------------------------------------
+_UNLOCK_LUA = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+"""
 
-def _now_ms() -> int:
-    # 밀리초로 변환하는 함수
-    return int(time.time() * 1000)
- 
-
-
-
-def _clamp_progress(x: float) -> float:
-    # 진행률 강제하는 함수 0.0~1.0
-    if x < 0.0:
-        return 0.0
-
-    if x > 1.0:
-        return 1.0
-    return float(x)
-
-
-
-# 토큰을 통해 lock을 구분함
-_UNLOCK_LUA =...
 
 
 class RedisJobStore(JobStore):
     """
-    ✅ Redis 기반 JobStore
+    Redis 기반 JobStore(Repository) 구현체.
 
     Key 설계:
-      - job 상태:  job:{job_id} (HASH)
-      - lock:     lock:job:{job_id} (STRING)
+      - Job 데이터:  {prefix}job:{job_id}        (HASH)
+      - Job 락:      {prefix}lock:job:{job_id}   (STRING)
 
     HASH 필드:
-      status, progress, created_at_ms, updated_at_ms, result_json, error, meta_json
+      job_id, status, created_at, updated_at, input_wav_path, result_path, error
     """
 
-    # prefix는 string 형태지만 키워드 인자로 사용가능
     def __init__(self, redis: Redis, *, key_prefix: str = ""):
-        self._r = redis # 레디스 명령어 대체
-        self._p = key_prefix  # 키 역할을 해줌
+        self._r = redis
+        self._p = key_prefix or ""
 
-    # 키의 상태를 저장함
     def _job_key(self, job_id: str) -> str:
         return f"{self._p}job:{job_id}"
 
-    # 누가 lock을 사용중인지 리턴해줌
     def _lock_key(self, job_id: str) -> str:
         return f"{self._p}lock:job:{job_id}"
 
-    # redis에서 읽은 hash를 jobsnapchat으로 변환함
-    # redis의 문자열을 타입객체로 바꿈
-    def _snap_from_hash(self, job_id: str, h: Dict[str, Any]) -> JobSnapshot:
-        # 무조건 str혹은 none으로
-        def _s(x: Any) -> Optional[str]:
-            if x is None:
-                return None
-            if isinstance(x, (bytes, bytearray)):
-                return x.decode("utf-8")
-            return str(x)
-        # sx가 비어있지 않으면 int형태로 return 해라 기본은 0
-        def _i(x: Any, default: int = 0) -> int:
-            sx = _s(x)
-            return int(sx) if sx is not None and sx != "" else default
+    # -----------------------------
+    """ 
+        reids는 객체를 모른다 job_id랑 status이런건 redis에서 모른다
+        그래서 "job_id" "status" 이런식으로 redis에 넣어준다
+    """
+    # -----------------------------
+    
+    # none 이라면 "" 로 빈 문자열로 아니라면 string으로
+    # 사실 관례적으로 값이 없으면 ""로 통일한다
+    @staticmethod
+    def _to_str(v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v)
 
-        #이건 위에거 float도 가능
-        def _f(x: Any, default: float = 0.0) -> float:
-            sx = _s(x)
-            return float(sx) if sx is not None and sx != "" else default
+    # datetime을  역 직렬화 함
+    @staticmethod
+    def _dt_to_str(dt: datetime) -> str:
+        # UTC 기준으로 저장하는 게 일반적(너는 create에서 utcnow 사용 중)
+        return dt.isoformat()
 
-        # status 형태나 queued 형태
-        status = _s(h.get("status")) or "queued"
+    # datetime을 직렬화 함
+    @staticmethod
+    def _str_to_dt(s: str) -> datetime:
+        if not s:
+            return datetime.utcnow()
+        return datetime.fromisoformat(s)
+
+    # job을 직렬화하는 과정
+    """
+        job_id : 여기에 들어온 job의 dict는 다 직렬화 된다
+        job_id라는 문자열에 job_id값을 넣고 status에 값을 넣는다 이런식으로 값을
+        “Redis의 job:{job_id} 해시 안에
+        job_id라는 필드가 있고,
+        그 필드의 값이 실제 job_id 문자열이다.”
         
-        # 진행률
-        progress = _clamp_progress(_f(h.get("progress"), 0.0))
-        created_at_ms = _f(h.get("created_at_ms"), 0)
-        updated_at_ms = _f(h.get("updated_at_ms"), 0)
+        Key: "job:abc"       ← Redis의 key
+        Type: Hash
+        Fields:
+            job_id          -> "abc"
+            status          -> "QUEUED"
+            created_at      -> "2026-01-23T15:42:10"
+            updated_at      -> "2026-01-23T15:42:10"
+            input_wav_path  -> "/data/jobs/abc/input.wav"
+            result_path     -> ""
+            error           -> ""
+        
+        이런식으로 객체를 만들고 그곳에 데이터를 넣음
+    """
+    def _serialize_job(self, job: Job) -> Dict[str, str]:
+        return {
+            "job_id": job.job_id,
+            "status": job.status.value if isinstance(job.status, JobStatus) else str(job.status),
+            "created_at": self._dt_to_str(job.created_at),
+            "updated_at": self._dt_to_str(job.updated_at),
+            "input_wav_path": job.input_wav_path or "",
+            "result_path": job.result_path or "",
+            "error": job.error or "",
+        }
+        
+        
+        
+    """
+        이건 역 직렬화를 하는 과정
+    """
+    def _deserialize_job(self, h: Dict[str, str]) -> Job:
+        def g(key: str) -> str:
+            return h.get(key, "")
 
-        result_json = _f(h.get("result_json"))
-        meta_json = _f(h.get("meta_json"))
-        error = _f(h.get("error"))
+        job_id = g("job_id")
+        status_str = g("status") or JobStatus.QUEUED.value
 
-        result = json.loads(result_json) if result_json else None
-        meta = json.loads(meta_json) if meta_json else None
-
-        return JobSnapshot(
+        return Job(
             job_id=job_id,
-            status=status, 
-            progress=progress,
-            created_at_ms=created_at_ms,
-            updated_at_ms=updated_at_ms,
-            result=result,
-            error=error,
-            meta=meta,
+            status=JobStatus(status_str),
+            created_at=self._str_to_dt(g("created_at")),
+            updated_at=self._str_to_dt(g("updated_at")),
+            input_wav_path=g("input_wav_path") or None,
+            result_path=g("result_path") or None,
+            error=g("error") or None,
         )
 
-    # job을 생섬함
-    async def create_job(
-        self,
-        job_id: str,
-        *,
-        meta: Optional[Dict[str, Any]] = None,
-        ttl_seconds: int = 60 * 30,
-    ) -> None:
-        now = _now_ms()
-        key = self._job_key(job_id)
-        
-        mapping: Dict[str, Any] = {
-            "status": "queued",
-            "progress": "0.0",
-            "created_at_ms": str(now),
-            "updated_at_ms": str(now),
-            "result_json": "",
-            "error": "",
-            "meta_json": json.dumps(meta or {}, ensure_ascii=False),
-        }
 
-        # ✅ HSET + EXPIRE를 pipeline으로 묶어서 RTT 줄임
+    # -----------------------------
+    # 포트 관련 코드
+    # -----------------------------
+    async def create(self, job: Job, *, ttl_seconds: int = 60 * 30) -> None:
+        """ 
+            이 코드에는 job객체와 ttl시간이 input되고
+            job에 key가 할당되며 이 job은 레디스로 넘어간다
+        """
+        # key를 만든다 이는 위에 만든 redis key만드는 공식에 따라 만들어진다
+        key = self._job_key(job.job_id)
+        # 레디스 클라이언트에게 이게 이미 존재하는지 물어보고 없으면 0 있으면 1
+        exists = await self._r.exists(key)
+        if exists:
+            raise ValueError(f"Job already exists: {job.job_id}")
+
+        # 이 파이프는 여러 redis명령을 묶기위한 객체
         pipe = self._r.pipeline()
-        pipe.hset(key, mapping=mapping)
+        # 파이프를 세팅한다 그리고 이거를 직렬화해서 매핑한다 기준은 key
+        pipe.hset(key, mapping=self._serialize_job(job))
+        # 그리고 이 키를 ttl 초후에 삭제한다
         pipe.expire(key, ttl_seconds)
+        # 이걸 redis에 보낸다 pipe를 ._r로 레디스 객체로 묶었기 때문에 가능
         await pipe.execute()
 
-    async def get_status(self, job_id: str) -> Optional[JobSnapshot]:
+    async def get(self, job_id: str) -> Optional[Job]:
+        """ 
+            이 코드를 통해서 job_id만 있으면 redis 내부에 있는
+            현재 상태를 역직렬화 해서 가져온다
+        """
+        # key에 job_id를 기반으로 그 job_id의 키를 저장한다
         key = self._job_key(job_id)
+        # 그 키의 레디스 정보를 모두 가져온다
         h = await self._r.hgetall(key)
         if not h:
             return None
-        return self._snap_from_hash(job_id, h)
+        # 그리고 이거를 역직렬화 ㅎ나다
+        return self._deserialize_job(h)
 
-    async def set_running(self, job_id: str) -> None:
-        key = self._job_key(job_id)
-        now = _now_ms()
-        # 존재하지 않으면 조용히 무시 (정책)
-        await self._r.hset(key, mapping={"status": "running", "updated_at_ms": str(now)})
+    async def save(self, job: Job, *, ttl_seconds: Optional[int] = None) -> None:
+        """
+            job과 ttl시간이 input된다
+            뭐를 save할지는 모른다 나중에 
+            job.mark_done() 이런식으로 job을 바꾸고 여기는 save만 해준다
+        """
+        key = self._job_key(job.job_id)
+        # 이게 존재하는지 확인함
+        exists = await self._r.exists(key)
+        if not exists:
+            raise ValueError(f"Job not found (cannot save): {job.job_id}")
+        # 똑같이 파이프라인 만들고 현재상태를 매핑함 직렬화 해서
+        pipe = self._r.pipeline()
+        pipe.hset(key, mapping=self._serialize_job(job))
+        if ttl_seconds is not None:
+            pipe.expire(key, ttl_seconds)
+        await pipe.execute()
+    
+    async def delete(self, job_id: str) -> None:
+        # 삭제한다 job을 삭제한다
+        await self._r.delete(self._job_key(job_id))
 
-    async def set_progress(self, job_id: str, *, progress: float) -> None:
-        key = self._job_key(job_id)
-        now = _now_ms()
-        p = _clamp_progress(progress)
-        await self._r.hset(
-            key,
-            mapping={"progress": str(p), "updated_at_ms": str(now)},
-        )
-
-    async def set_succeeded(self, job_id: str, *, result: Dict[str, Any]) -> None:
-        key = self._job_key(job_id)
-        now = _now_ms()
-        await self._r.hset(
-            key,
-            mapping={
-                "status": "succeeded",
-                "progress": "1.0",
-                "result_json": json.dumps(result, ensure_ascii=False),
-                "error": "",
-                "updated_at_ms": str(now),
-            },
-        )
-
-    async def set_failed(self, job_id: str, *, error: str) -> None:
-        key = self._job_key(job_id)
-        now = _now_ms()
-        await self._r.hset(
-            key,
-            mapping={
-                "status": "failed",
-                "result_json": "",
-                "error": error,
-                "updated_at_ms": str(now),
-            },
-        )
-
+    # -----------------------------
+    # Lock API
+    # -----------------------------
+    """
+        락을 잡는 키다ㅏ
+        lk 에 lock_key를 만든다 lock:job:job_id 이런시이었던가 
+    """
     async def acquire_lock(
         self,
         job_id: str,
@@ -187,22 +201,25 @@ class RedisJobStore(JobStore):
         token: str,
         ttl_seconds: int = 60 * 10,
     ) -> bool:
-        """
-        ✅ 락이 없을 때만 설정(NX) + TTL(EX)
-        Redis가 원자적으로 처리해주므로 '가능여부 확인' 메서드가 필요 없음.
-        """
         lk = self._lock_key(job_id)
+        # 만약 lk라는 키로 락을 잡아본다 nx는 이미 있으면 실패라는 뜻
+        """  
+            key   = "lock:job:123"
+            value = "a1b2c3-token"
+            ttl   = 60
+        """
         ok = await self._r.set(lk, token, nx=True, ex=ttl_seconds)
         return bool(ok)
-
+    
     async def release_lock(self, job_id: str, *, token: str) -> bool:
-        """
-        ✅ 토큰이 일치할 때만 락 해제 (Lua로 원자 수행)
+        """  
+            lua 함수가 나온다 이건 만약 토큰과 내 락을 비교했는데 일치하면 푼다는 말이다
         """
         lk = self._lock_key(job_id)
+        # eval 은 lus 스크립트를 내부에서 실행하라는 말이다
         res = await self._r.eval(_UNLOCK_LUA, 1, lk, token)
         return int(res) == 1
-
+    # ttl 시간을 변경함
     async def touch_ttl(self, job_id: str, *, ttl_seconds: int) -> None:
         key = self._job_key(job_id)
         await self._r.expire(key, ttl_seconds)

@@ -9,7 +9,11 @@ from app.adapters.ml.dto import (
     MLProcessResponseDTO,
 )
 
-# dot에 내용을 채울것임
+"""
+    역할:
+    실제로 요청하는 코드
+    결과파일이 들어오면 이걸 json형식으로 return 함
+"""
 
 # base_url로 들어온 코드에서 끝의 / 를 없앤다 나중에 사용시 //를 함을 막아쥼
 # timeout 시간을 120초로 정함 이거 넘으면 안되는거
