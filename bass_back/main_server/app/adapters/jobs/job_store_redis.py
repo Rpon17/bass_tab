@@ -99,6 +99,7 @@ class RedisJobStore(JobStore):
             "status": job.status.value if isinstance(job.status, JobStatus) else str(job.status),
             "created_at": self._dt_to_str(job.created_at),
             "updated_at": self._dt_to_str(job.updated_at),
+            "youtube_url": job.youtube_url or "",
             "input_wav_path": job.input_wav_path or "",
             "result_path": job.result_path or "",
             "error": job.error or "",
@@ -121,6 +122,7 @@ class RedisJobStore(JobStore):
             status=JobStatus(status_str),
             created_at=self._str_to_dt(g("created_at")),
             updated_at=self._str_to_dt(g("updated_at")),
+            youtube_url=g("youtube_url") or None,
             input_wav_path=g("input_wav_path") or None,
             result_path=g("result_path") or None,
             error=g("error") or None,
@@ -186,6 +188,33 @@ class RedisJobStore(JobStore):
     async def delete(self, job_id: str) -> None:
         # 삭제한다 job을 삭제한다
         await self._r.delete(self._job_key(job_id))
+    
+    # 설정한 여기 queue에는 워커에서 선언할 queue name이 들어간다
+    # 그리고 prefix
+    def _queue_key(self, queue: str) -> str:
+        return f"{self._p}queue:{queue}"
+
+    # job_id와 queue를 기준으로 job_id를 queue 에 집어넣음
+    # 그렇게 만든 job_id와 큐
+    async def enqueue(self, queue: str, job_id: str) -> None:
+        qk = self._queue_key(queue)
+        await self._r.lpush(qk, job_id)
+    
+    # queue 이름과 timeseconds(최대 대기한도)를 기준으로 dequeue함
+    # 일단 qk로 queue_key를 찾음 그리고
+    # 그리고 시간이 지나면 dequeue 해라 라는뜻임
+    # 여기서 timeout_second 이건 그냥 worker가 얼마만큼 꺠느냐
+    
+    async def dequeue(self, queue: str, *, timeout_seconds: int = 5) -> Optional[str]:
+        qk = self._queue_key(queue)
+        item = await self._r.brpop(qk, timeout=timeout_seconds)
+        if not item:
+            return None
+        _, raw = item
+        # Redis에서 꺼낸 값이 bytes일 수도, str일 수도 있어서, 항상 str로 통일하기 위한 코드
+        return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+
+
 
     # -----------------------------
     # Lock API

@@ -30,6 +30,10 @@ class JobStore(ABC):
         ...
         
     @abstractmethod
+    async def dequeue(self, queue: str, *, timeout_seconds: int = 5) -> Optional[str]:
+        ...
+
+    @abstractmethod
     async def acquire_lock(
         self,
         job_id: str,
