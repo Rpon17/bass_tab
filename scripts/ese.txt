@@ -1,0 +1,21 @@
+main_server
+
+경로이동
+cd C:\BASS_PROJECT\bass_back\main_server
+가상환경 키는법
+.\.venv\Scripts\activate
+fastapi 키는법
+
+
+ml_server
+
+경로이동
+cd C:\BASS_PROJECT\bass_back\ml_server
+가상환경 키는법
+.\.venv\Scripts\activate
+fastapi 키는법
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+
+시작점 고정
+uvicorn api.app:app --reload --port 9001
+scripts/dev_run.ps1

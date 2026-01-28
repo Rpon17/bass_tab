@@ -20,94 +20,126 @@ QUEUE_NAME = "youtube"
 @dataclass(frozen=True)
 class WorkerConfig:
     redis_url: str
-    key_prefix: str = "job:"             
+    key_prefix: str = "job:"              # 너는 key_prefix를 job:로 쓰고 있음
     queue_name: str = QUEUE_NAME
     job_ttl_seconds: int = 60 * 30
-    lock_ttl_seconds: int = 60
+
+    # ✅ yt-dlp 다운로드가 60초 넘는 경우가 흔해서 기본값을 상향(중복처리 방지)
+    lock_ttl_seconds: int = 60 * 10
+
     output_dir: Path = Path("./data/youtube")
+
 
 # 이벤트루프를 종료하게 만드는 것
 class GracefulShutdown:
     def __init__(self) -> None:
         self._stop = asyncio.Event()
-    
+
     def install(self) -> None:
-        # loop 는 이벤트루프 를 가져옴
-        loop = asyncio.get_event_loop()
-        # 종료시그널이 오면
+        # ✅ running loop를 잡는 게 더 안전함(특히 asyncio.run 컨텍스트)
+        loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
-                # self._stop.set을 저장함 이는 on으로 바꿔서 워커에게 그만하라 보내는것
                 loop.add_signal_handler(sig, self._stop.set)
             except NotImplementedError:
                 signal.signal(sig, lambda *_: self._stop.set())
-    
+
     # 외부에서 read전용식으로 하게 만듬
     @property
     def stop_event(self) -> asyncio.Event:
         return self._stop
 
+
 # 워커 전용 유스케이스를 모아놓음 워커가 할 일 리스트
-""" 
+"""
     job_id: 큐에서 꺼낸 식별자
     store: Redis 기반 JobStore (상태/락/TTL 관리)
     downloader: yt-dlp 어댑터
     cfg: 워커 설정 묶음
 """
-async def process_one_job(*, job_id: str, store: RedisJobStore, downloader: YtDlpYoutubeAudioDownloader, cfg: WorkerConfig) -> None:
-    # stor에서 job을 가져옴
+async def process_one_job(
+    *,
+    job_id: str,
+    store: RedisJobStore,
+    downloader: YtDlpYoutubeAudioDownloader,
+    cfg: WorkerConfig,
+) -> None:
     job = await store.get(job_id)
-    # job이 없으면 무시하고 종료함
     if not job:
         return
-    # 만약 job 상태가 queue되지 않아도 무시하고 종료
+
+    # 잡이 q여야만 가능함
     if job.status != JobStatus.QUEUED:
         return
 
-    # redis에 맞게 토큰 발급(락전용)
-    token = uuid.uuid4().hex
-    # lock에는 job_id와 토큰 그리고 ttl_seconds를기반으로 lock을 잡음
-    locked = await store.acquire_lock(job_id, token=token, ttl_seconds=cfg.lock_ttl_seconds)
-    if not locked:
-        return
+    # 토큰 발급하고
+    token: str | None = None
+    locked = False
 
     try:
-        # 그리고 running상태로 시도하고 이거를 상태 저장함
-        job.mark_running()
-        await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
+        token = uuid.uuid4().hex
+        # 지금 이거는 이 토큰을가진 이 job_id가 쓰고있다고 락잠금
+        locked = await store.acquire_lock(job_id, token=token, ttl_seconds=cfg.lock_ttl_seconds)
+        if not locked:
+            return
 
-        # url은 job에 저장된 url 
+        # url 못찾는 예외처리
         url = job.youtube_url
         if not url:
-            # url이 없으면 실패에러처리하고 상태저장
             job.mark_failed(error="missing youtube_url")
             await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
             return
-        # 그리고 출력 디렉토리 준비
+
+        # ✅ (선택) 다운로드 시작을 RUNNING으로 표시하고 싶으면 여기서 mark_running()
+        #     지금은 너가 SUBMITTED를 쓰니까 일단 유지해도 됨
+        # job.mark_running()
+        # await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
+
+        # 일단 다운로드할파일 국밥파일로 만들고 무거운 ylt작업 실햄함
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
         out_path = cfg.output_dir / f"{job_id}.wav"
 
-        # 실제로 무거운 작업 실시
         wav_path = await downloader.download_wav(url=url, output_path=out_path)
 
-        # DONE으로 상태 바꾸고 저장함
-        job.mark_done(result_path=str(wav_path))
+        # 다움로드된 wav파일을 job에 저장함
+        job.input_wav_path = str(wav_path)
+
+        # 이게 되었으니 바로 ml_server로 보냄
+        # ✅ 전제: JobStatus.SUBMITTED / job.mark_submitted() 가 도메인에 있어야 함
+        job.mark_submitted()
         await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
 
-    # 예외가 생기면 ERROR 내고 저장
+        # 이 job_id는 바로 submitted에 저장함
+        await store.add_submitted(job_id)
+
     except Exception as e:
         job.mark_failed(error=str(e))
         await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
-    # 마지막으로 락을 해제함
+
+        # 실패라면 submitted에 넣지않음
+        try:
+            await store.remove_submitted(job_id)
+        except Exception:
+            pass
+
     finally:
-        await store.release_lock(job_id, token=token)
+        # 이제 락 풀음
+        if token and locked:
+            try:
+                ok = await store.release_lock(job_id, token=token)
+                # ✅ release 실패는 큰 사고(토큰 mismatch/TTL 만료)일 수 있어서 최소 로그는 남기는 게 좋음
+                # print(f"[WARN] release_lock failed job_id={job_id}")  # 필요하면 로그로 교체
+                _ = ok
+            except Exception:
+                # release 자체가 실패해도 워커 전체는 죽이지 않음
+                pass
+
 
 # 워커가 실행되는 동안 유지될 비동기 메인 루프
 # 설정(redis url, queue name, output dir, ttl 등)은 cfg로 묶어서 전달
 async def worker_loop(cfg: WorkerConfig) -> None:
-    # redis.from_url(...)로 Redis 클라이언트를 생성
     r = redis.from_url(cfg.redis_url)
-    # 실제로 연결되는지 확인
+    # 실제로 되는지 확인함
     await r.ping()
 
     # strore와 downloader에 직접만든 adapter기능 주입
@@ -118,26 +150,24 @@ async def worker_loop(cfg: WorkerConfig) -> None:
     # shutdown.stop_event가 set 되도록 신호 핸들러를 등록
     shutdown = GracefulShutdown()
     shutdown.install()
-    """ 
-        dequeue는 워커가 할 일이 생길 때까지 기다리는 동작이고,
-        enqueue는 다른 프로세스(API 서버)가 job을 등록할 때 발생합니다.
-    """
+
     try:
         # stop_event가 set될 때까지 계속 돈다
         # 즉 종료요청이 오면 자연스럽게 종료됨
         while not shutdown.stop_event.is_set():
-            # 큐에있던 잡을 하나 뺴옴
+            # job_id하나 redis내부큐에서 dequeue해서 빼옴
             job_id = await store.dequeue(cfg.queue_name, timeout_seconds=3)
-            # 없으면 뭐 하지말고 기다려
             if not job_id:
                 continue
-            # 뺴온 job을 가지고 작업을 실행함
+            # 가져온 job_id시행
             await process_one_job(job_id=job_id, store=store, downloader=downloader, cfg=cfg)
-    # 레디스 연결을 정리해라
+
+    #  레디스 연결정리
     finally:
         await r.aclose()
 
 
+# 메인이여 이걸 호출해라
 def main() -> None:
     cfg = WorkerConfig(
         redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),

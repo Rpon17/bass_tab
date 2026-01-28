@@ -1,49 +1,59 @@
-# main_server/app/adapters/ml/http_client.py
 from __future__ import annotations
 
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Literal
 import httpx
 
-from app.adapters.ml.dto import (
-    MLProcessRequestDTO,
-    MLProcessResponseDTO,
+from app.application.ports.ml_client_port import (
+    MLClientPort, MLProcessResponse, MLProcessResult, Mode
 )
 
-"""
-    역할:
-    실제로 요청하는 코드
-    결과파일이 들어오면 이걸 json형식으로 return 함
-"""
+@dataclass(frozen=True)
+class HttpMLClient(MLClientPort):
+    base_url: str
+    timeout_seconds: float = 120.0
 
-# base_url로 들어온 코드에서 끝의 / 를 없앤다 나중에 사용시 //를 함을 막아쥼
-# timeout 시간을 120초로 정함 이거 넘으면 안되는거
-class MLServerHttpClient:
-    def __init__(self, base_url: str, *, timeout_sec: float = 120.0):
-        self._base_url = base_url.rstrip("/")
-        self._timeout = timeout_sec
-
-    # 요청 dto를 넣으면 수신 dto를 받는 과정
-    # 파일 유무 검사하고 구체적인 데이터들을 집어넣음
-    async def process(self, req: MLProcessRequestDTO) -> MLProcessResponseDTO:
-        wav_path = Path(req.file_path)
-        if not wav_path.exists():
-            raise FileNotFoundError(f"WAV file not found: {wav_path}")
-
-        url = f"{self._base_url}/v1/process"
-
-        data = {
-            "job_id": req.job_id,
-            "mode": req.form.mode,
-            "onset_threshold": str(req.form.onset_threshold),
-            "frame_threshold": str(req.form.frame_threshold),
-            "min_note_len_ms": str(req.form.min_note_len_ms),
+    async def process(
+        self,
+        *,
+        job_id: str,
+        input_wav_path: str,
+        mode: Mode = "full",
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> MLProcessResponse:
+        payload = {
+            "job_id": job_id,
+            "mode": mode,
+            "input_wav_path": input_wav_path,
+            "meta": meta or {},
         }
 
-        # wav경로를 염 그리고 그 이름대로 확인하고
-        # json형태로 return 해줌
-        with wav_path.open("rb") as f:
-            files = {"file": (wav_path.name, f, "audio/wav")}
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.post(url, data=data, files=files)
-                resp.raise_for_status()
-                return MLProcessResponseDTO.model_validate(resp.json())
+        url = f"{self.base_url}/v1/process"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                r = await client.post(url, json=payload)
+                r.raise_for_status()
+                data = r.json()
+        except (httpx.TimeoutException) as e:
+            return MLProcessResponse(ok=False, mode=mode, error=f"ML timeout: {e}")
+        except (httpx.HTTPError) as e:
+            return MLProcessResponse(ok=False, mode=mode, error=f"ML http error: {e}")
+        except Exception as e:
+            return MLProcessResponse(ok=False, mode=mode, error=f"ML unknown error: {e}")
+
+        # ML 서버 DTO를 main_server 내부 모델로 매핑
+        if not data.get("ok"):
+            return MLProcessResponse(ok=False, mode=data.get("mode", mode), error=data.get("error"))
+
+        result = data.get("result") or {}
+        return MLProcessResponse(
+            ok=True,
+            mode=data.get("mode", mode),
+            result=MLProcessResult(
+                bass_wav_path=result.get("bass_wav_path"),
+                bpm=result.get("bpm"),
+                notes=result.get("notes"),
+                tabs=result.get("tabs"),
+            ),
+            error=None,
+        )

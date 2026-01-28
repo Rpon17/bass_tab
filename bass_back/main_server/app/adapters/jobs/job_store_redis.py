@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from redis.asyncio import Redis
 
 from bass_back.main_server.app.application.ports.job_store_port import JobStore
-from bass_back.main_server.app.domain.jobs_domain import Job, JobStatus
-
+from bass_back.main_server.app.domain.jobs_domain import Job, JobStatus, SourceMode ,ResultMode
 # ------------------------------------------------------------
 # Redis 락 해제: token이 맞을 때만 삭제 (원자적)
 # ------------------------------------------------------------
@@ -100,6 +99,8 @@ class RedisJobStore(JobStore):
             "created_at": self._dt_to_str(job.created_at),
             "updated_at": self._dt_to_str(job.updated_at),
             "youtube_url": job.youtube_url or "",
+            "source_mode": job.source_mode.value if job.source_mode else SourceMode.ORIGINAL.value,
+            "result_mode": job.result_mode.value if job.result_mode else ResultMode.FULL.value,
             "input_wav_path": job.input_wav_path or "",
             "result_path": job.result_path or "",
             "error": job.error or "",
@@ -110,12 +111,19 @@ class RedisJobStore(JobStore):
     """
         이건 역 직렬화를 하는 과정
     """
-    def _deserialize_job(self, h: Dict[str, str]) -> Job:
+    def _deserialize_job(self, h: Dict[str, Any]) -> Job:
         def g(key: str) -> str:
-            return h.get(key, "")
+            v = h.get(key, "")
+            if isinstance(v, (bytes, bytearray)):
+                return v.decode()
+            return str(v) if v is not None else ""
 
         job_id = g("job_id")
         status_str = g("status") or JobStatus.QUEUED.value
+
+        # ✅ 새 필드 읽기 (없으면 기본값)
+        source_mode_str = g("source_mode") or SourceMode.ORIGINAL.value
+        result_mode_str = g("result_mode") or ResultMode.FULL.value
 
         return Job(
             job_id=job_id,
@@ -123,10 +131,16 @@ class RedisJobStore(JobStore):
             created_at=self._str_to_dt(g("created_at")),
             updated_at=self._str_to_dt(g("updated_at")),
             youtube_url=g("youtube_url") or None,
+
+            # ✅ 여기 변경
+            source_mode=SourceMode(source_mode_str),
+            result_mode=ResultMode(result_mode_str),
+
             input_wav_path=g("input_wav_path") or None,
             result_path=g("result_path") or None,
             error=g("error") or None,
         )
+
 
 
     # -----------------------------
@@ -188,7 +202,11 @@ class RedisJobStore(JobStore):
     async def delete(self, job_id: str) -> None:
         # 삭제한다 job을 삭제한다
         await self._r.delete(self._job_key(job_id))
+    # -----------------------------
+    # queue 관련 코드
+    # -----------------------------
     
+    # youtube queue
     # 설정한 여기 queue에는 워커에서 선언할 queue name이 들어간다
     # 그리고 prefix
     def _queue_key(self, queue: str) -> str:
@@ -213,6 +231,20 @@ class RedisJobStore(JobStore):
         _, raw = item
         # Redis에서 꺼낸 값이 bytes일 수도, str일 수도 있어서, 항상 str로 통일하기 위한 코드
         return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+    
+    # submitted queue
+    
+    async def enqueue_submitted(self, job_id: str) -> None:
+        qk = self._queue_key("submitted")
+        await self._r.lpush(qk, job_id)
+
+    async def dequeue_submitted(self, *, timeout_seconds: int = 3) -> str | None:
+        qk = self._queue_key("submitted")
+        item = await self._r.brpop(qk, timeout=timeout_seconds)
+        if not item:
+            return None
+        _, job_id = item
+        return job_id.decode() if isinstance(job_id, (bytes, bytearray)) else str(job_id)
 
 
 
@@ -249,6 +281,52 @@ class RedisJobStore(JobStore):
         res = await self._r.eval(_UNLOCK_LUA, 1, lk, token)
         return int(res) == 1
     # ttl 시간을 변경함
-    async def touch_ttl(self, job_id: str, *, ttl_seconds: int) -> None:
+    async def touch_ttl(self, job_id : str, *, ttl_seconds: int) -> None:
         key = self._job_key(job_id)
         await self._r.expire(key, ttl_seconds)
+        
+        
+    # -----------------------------
+    # Submitted
+    # -----------------------------
+    def _submitted_key(self) -> str:
+        return f"{self._p}set:submitted"
+
+    async def add_submitted(self, job_id: str) -> None:
+        """
+            submit후에 호출함
+        """
+        sk = self._submitted_key()
+        await self._r.sadd(sk, job_id)
+
+    async def remove_submitted(self, job_id: str) -> None:
+        """
+            done/failed후에 호출함
+        """
+        sk = self._submitted_key()
+        await self._r.srem(sk, job_id)
+
+    async def sample_submitted(self, n: int = 10) -> List[str]:
+        """
+            랜덤으로 n개 샘플링해서 반환함
+        """
+        if n <= 0:
+            return []
+
+        sk = self._submitted_key()
+        # sk중에 랜덤으로 n개만큼 raw_items에 집어넣음
+        raw_items = await self._r.srandmember(sk, n)
+
+        # 무조건 n개에 대한 맞춤
+        if raw_items is None:
+            return []
+        if isinstance(raw_items, (bytes, bytearray, str)):
+            raw_items = [raw_items]
+
+        out: List[str] = []
+        for x in raw_items:
+            if isinstance(x, (bytes, bytearray)):
+                out.append(x.decode())
+            else:
+                out.append(str(x))
+        return out

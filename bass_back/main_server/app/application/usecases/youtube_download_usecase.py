@@ -32,8 +32,8 @@ class DownloadYoutubeAudioUseCase:
             if job is None:
                 raise ValueError(f"Job not found: {job_id}")
 
-            # 2) running 전이 + 저장
-            job.mark_running()
+            # 2) sumbitted 전이 + 저장
+            job.mark_submitted()
             await self.job_store.save(job, ttl_seconds=60 * 30)
 
             # 3) 실제 다운로드
