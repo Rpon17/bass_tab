@@ -1,0 +1,15 @@
+/storage/
+  songs/
+    song_id/
+      results/
+        result_id/
+          audio/
+            original.wav
+            bass_only.wav
+            bass_boosted.wav
+            bass_removed.wav
+          tab/
+            tab_original.json
+            tab_root.json
+          meta/
+            meta.json

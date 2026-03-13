@@ -3,177 +3,303 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import traceback
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
+import httpx
 import redis.asyncio as redis
 
-from bass_back.main_server.app.domain.jobs_domain import JobStatus
-from bass_back.main_server.app.adapters.jobs.job_store_redis import RedisJobStore
-from bass_back.main_server.app.adapters.youtube.youtube_download_adapter import YtDlpYoutubeAudioDownloader
+from app.adapters.jobs.job_store_redis import RedisJobStore
+from app.adapters.youtube.youtube_download_adapter import YtDlpYoutubeAudioDownloader
+from app.domain.jobs_domain import Job, JobStatus
+from shared.dtos.ml_ml_dto import MLProcessRequestDTO
+from app.application.services.text_normalize import normalize_text
+
+QUEUE_NAME: str = "youtube"
 
 
-QUEUE_NAME = "youtube"
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _log_step(message: str) -> None:
+    print(f"[submit-worker] {message}")
+
+
+def _log_kv(key: str, value: object) -> None:
+    print(f"[submit-worker]   {key}: {value}")
 
 
 @dataclass(frozen=True)
 class WorkerConfig:
     redis_url: str
-    key_prefix: str = "job:"              # 너는 key_prefix를 job:로 쓰고 있음
+    key_prefix: str = "bass:"
     queue_name: str = QUEUE_NAME
+    cookies_path: Path | None = None
     job_ttl_seconds: int = 60 * 30
-
-    # ✅ yt-dlp 다운로드가 60초 넘는 경우가 흔해서 기본값을 상향(중복처리 방지)
     lock_ttl_seconds: int = 60 * 10
+    storage_root: Path = Path(r"C:\bass_project\storage")
+    ml_server_base_url: str = "http://127.0.0.1:8001"
+    ml_submit_timeout_seconds: float = 30.0
 
-    output_dir: Path = Path("./data/youtube")
 
-
-# 이벤트루프를 종료하게 만드는 것
 class GracefulShutdown:
     def __init__(self) -> None:
-        self._stop = asyncio.Event()
+        self._stop: asyncio.Event = asyncio.Event()
 
     def install(self) -> None:
-        # ✅ running loop를 잡는 게 더 안전함(특히 asyncio.run 컨텍스트)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.add_signal_handler(sig, self._stop.set)
             except NotImplementedError:
-                signal.signal(sig, lambda *_: self._stop.set())
+                signal.signal(sig, lambda *_: self._stop.set())  # type: ignore[arg-type]
 
-    # 외부에서 read전용식으로 하게 만듬
     @property
     def stop_event(self) -> asyncio.Event:
         return self._stop
 
 
-# 워커 전용 유스케이스를 모아놓음 워커가 할 일 리스트
-"""
-    job_id: 큐에서 꺼낸 식별자
-    store: Redis 기반 JobStore (상태/락/TTL 관리)
-    downloader: yt-dlp 어댑터
-    cfg: 워커 설정 묶음
-"""
+class MLSubmitClient:
+    def __init__(self, base_url: str, *, timeout_seconds: float = 30.0) -> None:
+        self._base_url: str = base_url.rstrip("/")
+        self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=timeout_seconds)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def submit(
+        self,
+        *,
+        job_id: str,
+        song_id: str,
+        result_id: str,
+        input_wav_path: str,
+        result_path: str,
+        norm_title: str,
+        norm_artist: str,
+    ) -> None:
+        url: str = f"{self._base_url}/v1/process"
+
+        req: MLProcessRequestDTO = MLProcessRequestDTO(
+            job_id=job_id,
+            song_id=song_id,
+            result_id=result_id,
+            input_wav_path=input_wav_path,
+            result_path=result_path,
+            norm_title=norm_title,
+            norm_artist=norm_artist,
+        )
+
+        _log_step("ML submit request 생성 완료")
+        _log_kv("url", url)
+        _log_kv("body", req.model_dump())
+
+        r: httpx.Response = await self._client.post(url, json=req.model_dump())
+
+        _log_step("ML submit 응답 수신 완료")
+        _log_kv("status_code", r.status_code)
+        _log_kv("response_text", r.text)
+
+        r.raise_for_status()
+
+
+def _make_result_path(*, result_id: str) -> str:
+    return f"results/{result_id}"
+
+
+def _result_dir_from_path(*, cfg: WorkerConfig, result_path: str) -> Path:
+    return cfg.storage_root / Path(result_path)
+
+
+def _safe_strip(v: object | None) -> str:
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _ensure_result_id(*, job: Job) -> tuple[Job, str]:
+    rid: str = _safe_strip(getattr(job, "result_id", None))
+    if rid:
+        return job, rid
+
+    rid = uuid.uuid4().hex
+
+    try:
+        setattr(job, "result_id", rid)
+        return job, rid
+    except Exception:
+        try:
+            new_job: Job = replace(job, result_id=rid)
+            return new_job, rid
+        except Exception:
+            return job, rid
+
+
 async def process_one_job(
     *,
     job_id: str,
     store: RedisJobStore,
     downloader: YtDlpYoutubeAudioDownloader,
+    ml: MLSubmitClient,
     cfg: WorkerConfig,
 ) -> None:
-    job = await store.get(job_id)
+    _log_step("job 처리 시작")
+    _log_kv("job_id", job_id)
+
+    job: Job | None = await store.get(job_id)
     if not job:
+        _log_step("job 조회 실패 - job 없음")
         return
 
-    # 잡이 q여야만 가능함
     if job.status != JobStatus.QUEUED:
+        _log_step("job 스킵 - QUEUED 상태 아님")
         return
 
-    # 토큰 발급하고
     token: str | None = None
-    locked = False
+    locked: bool = False
 
     try:
         token = uuid.uuid4().hex
-        # 지금 이거는 이 토큰을가진 이 job_id가 쓰고있다고 락잠금
         locked = await store.acquire_lock(job_id, token=token, ttl_seconds=cfg.lock_ttl_seconds)
+
         if not locked:
+            _log_step("lock 획득 실패")
             return
 
-        # url 못찾는 예외처리
-        url = job.youtube_url
-        if not url:
-            job.mark_failed(error="missing youtube_url")
+        job = await store.get(job_id)
+        if not job or job.status != JobStatus.QUEUED:
+            return
+
+        youtube_url: str = _safe_strip(getattr(job, "youtube_url", None))
+        title: str = _safe_strip(getattr(job, "title", None))
+        artist: str = _safe_strip(getattr(job, "artist", None))
+        song_id: str = _safe_strip(getattr(job, "song_id", None))
+
+        if not youtube_url or not title or not artist or not song_id:
+            job.mark_failed(error="missing fields")
             await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
             return
 
-        # ✅ (선택) 다운로드 시작을 RUNNING으로 표시하고 싶으면 여기서 mark_running()
-        #     지금은 너가 SUBMITTED를 쓰니까 일단 유지해도 됨
-        # job.mark_running()
-        # await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
+        norm_title: str = normalize_text(title)
+        norm_artist: str = normalize_text(artist)
 
-        # 일단 다운로드할파일 국밥파일로 만들고 무거운 ylt작업 실햄함
-        cfg.output_dir.mkdir(parents=True, exist_ok=True)
-        out_path = cfg.output_dir / f"{job_id}.wav"
+        job, result_id = _ensure_result_id(job=job)
+        await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
 
-        wav_path = await downloader.download_wav(url=url, output_path=out_path)
+        result_path: str = _make_result_path(result_id=result_id)
+        result_dir: Path = _result_dir_from_path(cfg=cfg, result_path=result_path)
 
-        # 다움로드된 wav파일을 job에 저장함
-        job.input_wav_path = str(wav_path)
+        audio_dir: Path = result_dir / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
 
-        # 이게 되었으니 바로 ml_server로 보냄
-        # ✅ 전제: JobStatus.SUBMITTED / job.mark_submitted() 가 도메인에 있어야 함
+        original_wav_path: Path = audio_dir / "original.wav"
+
+        produced_path: Path = await downloader.download_wav(
+            url=youtube_url,
+            output_path=original_wav_path,
+        )
+
+        if not produced_path.exists():
+            raise FileNotFoundError(str(produced_path))
+
+        await ml.submit(
+            job_id=job_id,
+            song_id=song_id,
+            result_id=result_id,
+            input_wav_path=str(produced_path),
+            result_path=result_path,
+            norm_title=norm_title,
+            norm_artist=norm_artist,
+        )
+
         job.mark_submitted()
         await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
 
-        # 이 job_id는 바로 submitted에 저장함
         await store.add_submitted(job_id)
 
     except Exception as e:
-        job.mark_failed(error=str(e))
-        await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
+        traceback.print_exc()
 
-        # 실패라면 submitted에 넣지않음
         try:
-            await store.remove_submitted(job_id)
+            job2: Job | None = await store.get(job_id)
+            if job2:
+                job2.mark_failed(error=str(e))
+                await store.save(job2, ttl_seconds=cfg.job_ttl_seconds)
         except Exception:
             pass
 
     finally:
-        # 이제 락 풀음
         if token and locked:
             try:
-                ok = await store.release_lock(job_id, token=token)
-                # ✅ release 실패는 큰 사고(토큰 mismatch/TTL 만료)일 수 있어서 최소 로그는 남기는 게 좋음
-                # print(f"[WARN] release_lock failed job_id={job_id}")  # 필요하면 로그로 교체
-                _ = ok
+                await store.release_lock(job_id, token=token)
             except Exception:
-                # release 자체가 실패해도 워커 전체는 죽이지 않음
                 pass
 
 
-# 워커가 실행되는 동안 유지될 비동기 메인 루프
-# 설정(redis url, queue name, output dir, ttl 등)은 cfg로 묶어서 전달
 async def worker_loop(cfg: WorkerConfig) -> None:
-    r = redis.from_url(cfg.redis_url)
-    # 실제로 되는지 확인함
+    r: redis.Redis = redis.from_url(cfg.redis_url)
     await r.ping()
 
-    # strore와 downloader에 직접만든 adapter기능 주입
-    store = RedisJobStore(r, key_prefix=cfg.key_prefix)
-    downloader = YtDlpYoutubeAudioDownloader()
+    store: RedisJobStore = RedisJobStore(r, key_prefix=cfg.key_prefix)
 
-    # SIGINT(Ctrl+C), SIGTERM(docker stop 등)을 받으면
-    # shutdown.stop_event가 set 되도록 신호 핸들러를 등록
-    shutdown = GracefulShutdown()
+    downloader: YtDlpYoutubeAudioDownloader = YtDlpYoutubeAudioDownloader(
+        debug=True,
+        cookies_path=cfg.cookies_path,
+    )
+
+    ml: MLSubmitClient = MLSubmitClient(
+        cfg.ml_server_base_url,
+        timeout_seconds=cfg.ml_submit_timeout_seconds,
+    )
+
+    shutdown: GracefulShutdown = GracefulShutdown()
     shutdown.install()
 
     try:
-        # stop_event가 set될 때까지 계속 돈다
-        # 즉 종료요청이 오면 자연스럽게 종료됨
         while not shutdown.stop_event.is_set():
-            # job_id하나 redis내부큐에서 dequeue해서 빼옴
-            job_id = await store.dequeue(cfg.queue_name, timeout_seconds=3)
-            if not job_id:
+            jid: str | None = await store.dequeue(cfg.queue_name, timeout_seconds=3)
+            if not jid:
                 continue
-            # 가져온 job_id시행
-            await process_one_job(job_id=job_id, store=store, downloader=downloader, cfg=cfg)
 
-    #  레디스 연결정리
+            await process_one_job(
+                job_id=jid,
+                store=store,
+                downloader=downloader,
+                ml=ml,
+                cfg=cfg,
+            )
     finally:
+        await ml.aclose()
         await r.aclose()
 
 
-# 메인이여 이걸 호출해라
+def _require_env(name: str) -> str:
+    v: str | None = os.getenv(name)
+    if not v:
+        raise RuntimeError(f"Missing env: {name}")
+    return v.strip()
+
+
 def main() -> None:
-    cfg = WorkerConfig(
+    storage_root: Path = Path(_require_env("STORAGE_ROOT"))
+
+    cookies_env: str | None = os.getenv("YTDLP_COOKIEFILE")
+    cookies_path: Path | None = Path(cookies_env) if cookies_env else None
+
+    cfg: WorkerConfig = WorkerConfig(
         redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-        key_prefix=os.getenv("JOB_KEY_PREFIX", "job:"),
-        output_dir=Path(os.getenv("YOUTUBE_OUTPUT_DIR", "./data/youtube")),
+        key_prefix=os.getenv("JOB_KEY_PREFIX", "bass:"),
+        cookies_path=cookies_path,
+        storage_root=storage_root,
+        ml_server_base_url=os.getenv("ML_SERVER_URL", "http://127.0.0.1:8001"),
+        ml_submit_timeout_seconds=float(os.getenv("ML_SUBMIT_TIMEOUT", "30.0")),
     )
+
     asyncio.run(worker_loop(cfg))
 
 

@@ -12,8 +12,6 @@ class MLProcessFormDTO(BaseModel):
     ML서버에 어떤것을 요청할지 정리하고
         요청사항
         job_id , file_path, form 형태
-        
-        
     ML서버에서 수신을 어떻게 받을지 정리함
         수신사항
         ok , job_id, mode, result 혹은 error

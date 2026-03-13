@@ -20,7 +20,6 @@ class MLProcessResult:
 class MLProcessResponse:
     ok: bool
     source_mode: SourceMode
-    result_mode: ResultMode
     result: Optional[MLProcessResult] = None
     error: Optional[str] = None
 
@@ -31,9 +30,8 @@ class MLClientPort(Protocol):
         self,
         *,
         job_id: str,
-        input_wav_path: str,
+        output_dir: str,
         source_mode: SourceMode = SourceMode.ORIGINAL,
-        result_mode: ResultMode = ResultMode.FULL,
         meta: Optional[Dict[str, Any]] = None,
     ) -> MLProcessResponse:
         ...

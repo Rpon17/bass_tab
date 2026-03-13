@@ -5,7 +5,7 @@ from datetime import datetime
 from redis.asyncio import Redis
 
 from app.adapters.jobs.job_store_redis import RedisJobStore
-from bass_back.main_server.app.domain.jobs_domain import Job, JobStatus
+from app.domain.jobs_domain import Job, JobStatus
 
 
 @pytest.mark.asyncio
@@ -24,7 +24,7 @@ async def test_save_and_get_job():
         status=JobStatus.QUEUED,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
-        input_wav_path="input.wav",
+        output_dir="output_dir",
     )
 
     # 3. 저장
@@ -37,7 +37,7 @@ async def test_save_and_get_job():
     assert loaded is not None
     assert loaded.job_id == job.job_id
     assert loaded.status == JobStatus.QUEUED
-    assert loaded.input_wav_path == "input.wav"
+    assert loaded.output_dir == "output_dir"
 
     # 6. TTL 확인 (선택)
     ttl = await redis.ttl(store._job_key(job.job_id))

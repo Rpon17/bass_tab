@@ -1,57 +1,96 @@
-# application/usecases/youtube_download.py
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
 
-from bass_back.main_server.app.application.ports.job_store_port import JobStore
-from bass_back.main_server.app.application.ports.youtube_download_port import YoutubeAudioDownload
+from app.application.ports.job_store_port import JobStore
+from app.application.ports.youtube_download_port import YoutubeAudioDownload
 
-"""
-    jobstor 포트와 youtube download 포트 에서 정보들을 가져옴
-    이 정보들은 여기에는 job_id url out_path만 있으면 됨
-    토큰은 
-"""
+
 @dataclass(frozen=True)
 class DownloadYoutubeAudioUseCase:
     job_store: JobStore
     downloader: YoutubeAudioDownload
 
     async def run(self, *, job_id: str, url: str, output_path: Path) -> Path:
-        token = uuid.uuid4().hex
+        token: str = uuid.uuid4().hex
 
-        locked = await self.job_store.acquire_lock(job_id, token=token, ttl_seconds=60 * 10)
+        print("[youtube_download_uc] run 시작")
+        print(f"[youtube_download_uc] job_id={job_id}")
+        print(f"[youtube_download_uc] url={url}")
+        print(f"[youtube_download_uc] output_path={output_path}")
+        print(f"[youtube_download_uc] token={token}")
+
+        locked: bool = await self.job_store.acquire_lock(
+            job_id,
+            token=token,
+            ttl_seconds=60 * 10,
+        )
+        print(f"[youtube_download_uc] lock acquired={locked}")
+
         if not locked:
+            print("[youtube_download_uc] lock 획득 실패 -> output_path 반환")
+            print(f"[youtube_download_uc] output_path exists={output_path.exists()}")
             return output_path
 
         try:
-            # 1) Job 조회 (없으면 에러)
+            print("[youtube_download_uc] job 조회 시작")
             job = await self.job_store.get(job_id)
+            print(f"[youtube_download_uc] job 조회 결과 is_none={job is None}")
+
             if job is None:
                 raise ValueError(f"Job not found: {job_id}")
 
-            # 2) sumbitted 전이 + 저장
+            print("[youtube_download_uc] mark_submitted 시작")
+            print(f"[youtube_download_uc] before submitted job.status={job.status}")
             job.mark_submitted()
+            print(f"[youtube_download_uc] after submitted job.status={job.status}")
+
             await self.job_store.save(job, ttl_seconds=60 * 30)
+            print("[youtube_download_uc] submitted save 완료")
 
-            # 3) 실제 다운로드
-            produced_path = await self.downloader.download_wav(url, output_path=output_path)
+            print("[youtube_download_uc] downloader.download_wav 시작")
+            produced_path: Path = await self.downloader.download_wav(
+                url,
+                output_path=output_path,
+            )
+            print("[youtube_download_uc] downloader.download_wav 완료")
+            print(f"[youtube_download_uc] produced_path={produced_path}")
+            print(f"[youtube_download_uc] produced_path exists={produced_path.exists()}")
 
-            # 4) 성공 전이 + 결과 저장 (도메인 필드에 맞춰 저장)
+            print("[youtube_download_uc] mark_done 시작")
+            print(f"[youtube_download_uc] before done job.status={job.status}")
             job.mark_done(result_path=str(produced_path))
-            await self.job_store.save(job, ttl_seconds=60 * 30)
+            print(f"[youtube_download_uc] after done job.status={job.status}")
+            print(f"[youtube_download_uc] job.result_path={job.result_path}")
 
+            await self.job_store.save(job, ttl_seconds=60 * 30)
+            print("[youtube_download_uc] done save 완료")
+
+            print("[youtube_download_uc] run 정상 종료")
             return produced_path
 
         except Exception as e:
-            # 실패 전이 + 저장
+            print("[youtube_download_uc] 예외 발생")
+            print(f"[youtube_download_uc] exception type={type(e).__name__}")
+            print(f"[youtube_download_uc] exception={e}")
+
             job = await self.job_store.get(job_id)
+            print(f"[youtube_download_uc] except job reload is_none={job is None}")
+
             if job is not None:
+                print(f"[youtube_download_uc] before failed job.status={job.status}")
                 job.mark_failed(error=f"{type(e).__name__}: {e}")
+                print(f"[youtube_download_uc] after failed job.status={job.status}")
+                print(f"[youtube_download_uc] job.error={job.error}")
+
                 await self.job_store.save(job, ttl_seconds=60 * 30)
+                print("[youtube_download_uc] failed save 완료")
+
             raise
 
         finally:
-            await self.job_store.release_lock(job_id, token=token)
+            print("[youtube_download_uc] lock release 시작")
+            released: bool = await self.job_store.release_lock(job_id, token=token)
+            print(f"[youtube_download_uc] lock release 완료 released={released}")

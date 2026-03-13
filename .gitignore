@@ -7,6 +7,9 @@ __pycache__/
 venv/
 env/
 
+# ML models
+pretrained_models/
+
 # Node / Front
 node_modules/
 dist/
@@ -26,7 +29,7 @@ Thumbs.db
 # 음원
 .wav
 .mp3
-
+.json
 # Job outputs
 data/
 outputs/
@@ -39,3 +42,33 @@ tmp/
 # Logs
 *.log
 logs/
+
+# db
+db/data/index.db
+
+# secret
+.txt
+.md
+
+# IDE
+.vscode/
+.idea/
+
+# storage (important)
+storage/
+
+# python build
+*.egg-info/
+.eggs/
+
+# testing
+.pytest_cache/
+.coverage
+
+# sqlite
+*.sqlite
+*.sqlite3
+
+# redis
+dump.rdb
+
