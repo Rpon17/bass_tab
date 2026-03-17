@@ -32,8 +32,8 @@ function Create() {
     setIsLoading(true);
 
     try {
-      // ✅ 서버 Swagger 문서에 맞게 주소를 http://localhost:8000/v1/jobs 로 설정
-      const response = await fetch('http://localhost:8000/v1/jobs', {
+      // ✅ Render에 배포된 백엔드 주소로 변경!
+      const response = await fetch('https://bass-main-server.onrender.com/v1/jobs', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json' 
@@ -55,7 +55,7 @@ function Create() {
       }
     } catch (error) {
       console.error("통신 오류:", error);
-      alert("서버 연결에 실패했습니다. 백엔드 서버가 켜져 있는지 확인하세요.");
+      alert("서버 연결에 실패했습니다. Render 서버가 켜져 있는지 확인하세요.");
     } finally {
       // 요청 완료 후 로딩 상태 해제
       setIsLoading(false);

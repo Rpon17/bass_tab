@@ -18,9 +18,17 @@ function Player() {
   const audioRef = useRef(null);
   const currentBarRef = useRef(null);
 
+  // ✅ 백엔드 베이스 URL 설정
+  const API_BASE_URL = 'https://bass-main-server.onrender.com';
+
   useEffect(() => {
     if (songData?.[tabMode]) {
-      fetch(songData[tabMode])
+      // ✅ JSON 악보 데이터도 Render 서버에서 가져오도록 주소 결합
+      const tabUrl = songData[tabMode].startsWith('http') 
+        ? songData[tabMode] 
+        : `${API_BASE_URL}${songData[tabMode]}`;
+
+      fetch(tabUrl)
         .then(res => res.json())
         .then(setTabData)
         .catch(err => console.error("Tab load error:", err));
@@ -94,11 +102,10 @@ function Player() {
     for (let i = 0; i < tabData.length; i += 4) chunkedBars.push(tabData.slice(i, i + 4));
   }
 
-  // 버튼 스타일 공통화
   const navButtonStyle = {
     background: 'none', border: 'none', cursor: 'pointer', fontSize: '1rem',
     display: 'flex', alignItems: 'center', gap: '5px', padding: '5px 10px',
-    borderRadius: '5px', backgroundColor: '#f0f0f0'
+    borderRadius: '5px', backgroundColor: '#f0f0f0', fontWeight: 'bold'
   };
 
   const menuButtonStyle = {
@@ -111,22 +118,24 @@ function Player() {
     border: '1px solid #000', zIndex: 1000, marginTop: '2px', minWidth: '160px'
   };
 
+  // ✅ 오디오 소스 주소도 Render 서버 주소와 결합
+  const currentAudioSrc = songData[audioMode]?.startsWith('http')
+    ? songData[audioMode]
+    : `${API_BASE_URL}${songData[audioMode]}`;
+
   return (
     <div style={{ backgroundColor: 'white', color: 'black', minHeight: '100vh' }}>
-      {/* 🧭 상단 네비게이션 및 컨트롤러 */}
       <div style={{ position: 'sticky', top: 0, backgroundColor: 'white', padding: '15px 20px', zIndex: 500, borderBottom: '2px solid black' }}>
         
-        {/* 홈 & 뒤로가기 버튼 줄 */}
         <div style={{ display: 'flex', gap: '15px', marginBottom: '15px' }}>
           <button onClick={() => navigate('/home')} style={navButtonStyle}>🏠 Home</button>
           <button onClick={() => navigate(-1)} style={navButtonStyle}>⬅️ Back</button>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-          <h2 style={{ margin: 0, fontSize: '1.2rem' }}>{songData.title}</h2>
+          <h2 style={{ margin: 0, fontSize: '1.2rem' }}>{songData.title} - {songData.artist}</h2>
           
           <div style={{ display: 'flex', gap: '10px' }}>
-            {/* Audio Dropdown */}
             <div style={{ position: 'relative' }}>
               <button onClick={() => {setIsAudioMenuOpen(!isAudioMenuOpen); setIsTabMenuOpen(false);}} style={menuButtonStyle}>
                 AUDIO: {audioOptions.find(o => o.key === audioMode)?.label} ▾
@@ -143,7 +152,6 @@ function Player() {
               )}
             </div>
 
-            {/* Tab Dropdown */}
             <div style={{ position: 'relative' }}>
               <button onClick={() => {setIsTabMenuOpen(!isTabMenuOpen); setIsAudioMenuOpen(false);}} style={menuButtonStyle}>
                 TAB: {tabOptions.find(o => o.key === tabMode)?.label} ▾
@@ -161,10 +169,9 @@ function Player() {
             </div>
           </div>
         </div>
-        <audio ref={audioRef} controls src={songData[audioMode]} onTimeUpdate={handleTimeUpdate} style={{ width: '100%', height: '30px' }} />
+        <audio ref={audioRef} controls src={currentAudioSrc} onTimeUpdate={handleTimeUpdate} style={{ width: '100%', height: '30px' }} />
       </div>
 
-      {/* 악보 영역 */}
       <div style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
         {chunkedBars.map((group, idx) => (
           <div key={idx} style={{ display: 'flex', alignItems: 'center', marginBottom: '40px' }}>

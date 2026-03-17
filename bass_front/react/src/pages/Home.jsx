@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 
+// 이미지 경로는 칭기의 프로젝트 구조에 맞게 잘 설정되어 있어!
 import guitarImg from '../images/음악제작버튼.png'; 
 import searchImg from '../images/음악검색버튼.png';
 
@@ -14,14 +15,14 @@ function Home() {
       
       <div style={{ display: 'flex', justifyContent: 'center', gap: '40px', flexWrap: 'wrap' }}>
         
-        {/* 노래 제작 카드 */}
+        {/* 노래 제작 카드: 클릭 시 /create 페이지로 이동 */}
         <div 
           onClick={() => navigate('/create')}
           style={cardStyle}
           onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
           onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
         >
-          {/* ✅ 여기서 이미지의 크기를 결정합니다 (180px로 증량) */}
+          {/* ✅ 이미지 크기 180px 유지 */}
           <div style={iconWrapperStyle}>
             <img src={guitarImg} alt="노래 제작" style={imageStyle} />
           </div>
@@ -29,7 +30,7 @@ function Home() {
           <p style={descStyle}>YouTube URL로<br/>새로운 악보 생성</p>
         </div>
 
-        {/* 노래 검색 카드 */}
+        {/* 노래 검색 카드: 클릭 시 /search 페이지로 이동 */}
         <div 
           onClick={() => navigate('/search')}
           style={cardStyle}
@@ -48,7 +49,7 @@ function Home() {
   );
 }
 
-
+// 스타일 객체 정의 (칭기가 준 스타일 그대로 유지!)
 const cardStyle = {
   width: '350px',          
   padding: '50px 20px', 
