@@ -101,6 +101,7 @@ class MLSubmitClient:
 
         r: httpx.Response = await self._client.post(url, json=req.model_dump())
 
+        _log_step(f"result_path={result_path}")
         _log_step("ML submit 응답 수신 완료")
         _log_kv("status_code", r.status_code)
         _log_kv("response_text", r.text)
@@ -108,12 +109,8 @@ class MLSubmitClient:
         r.raise_for_status()
 
 
-def _make_result_path(*, result_id: str) -> str:
-    return f"results/{result_id}"
-
-
-def _result_dir_from_path(*, cfg: WorkerConfig, result_path: str) -> Path:
-    return cfg.storage_root / Path(result_path)
+def _make_result_path(*, cfg: WorkerConfig, result_id: str) -> str:
+    return str(cfg.storage_root / "results" / result_id)
 
 
 def _safe_strip(v: object | None) -> str:
@@ -191,8 +188,8 @@ async def process_one_job(
         job, result_id = _ensure_result_id(job=job)
         await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
 
-        result_path: str = _make_result_path(result_id=result_id)
-        result_dir: Path = _result_dir_from_path(cfg=cfg, result_path=result_path)
+        result_path: str = _make_result_path(cfg=cfg, result_id=result_id)
+        result_dir: Path = Path(result_path)
 
         audio_dir: Path = result_dir / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)

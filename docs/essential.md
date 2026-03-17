@@ -1,4 +1,37 @@
-main_server
+1
+deactivate
+cd C:\BASS_PROJECT\bass_back\main_server
+.\.venv\Scripts\activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+2
+deactivate
+cd C:\BASS_PROJECT\bass_back\main_server
+.\.venv\Scripts\activate
+$env:STORAGE_ROOT = "C:\bass_project\storage"
+$env:YTDLP_COOKIEFILE="C:\bass_project\bass_back\cookie\cookies.txt"
+python -m app.worker.submit_worker
+
+3
+deactivate
+cd C:\BASS_PROJECT\bass_back\main_server
+.\.venv\Scripts\activate
+python -m app.worker.communicate_worker  
+
+4
+deactivate
+cd C:\BASS_PROJECT\bass_back\ml_server
+.\.venv\Scripts\activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
+
+5
+deactivate
+cd C:\BASS_PROJECT\bass_back\ml_server
+.\.venv\Scripts\activate
+python -m app.worker.test_worker
+
+인덱스 새로만들기
+python C:\bass_project\bass_back\main_server\scripts\init_db.py
 
 경로이동
 cd C:\BASS_PROJECT\bass_back\main_server
@@ -69,7 +102,7 @@ python main_server/app/worker/youtube_worker.py
 깃허브 
 
 git add .
-git commit -m "워커 거의 끝나고 ml 연결할거임"
+git commit -m "다 끝나고 배포만하믄댐"
 git push -u origin master
 
 선언한 이름들

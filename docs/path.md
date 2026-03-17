@@ -14,4 +14,3 @@ create_job_usecase를 보면 result_path를 아직 경로를 안정함
     "root": { "exists": true, "download_url": "/results/def456/tab/root" },
     "full": { "exists": false, "download_url": null }
   }
-}

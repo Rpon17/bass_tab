@@ -11,3 +11,6 @@ class ResultRepositoryPort(Protocol):
 
     async def save(self, *, result: Result) -> None:
         ...
+        
+    async def get_all_by_song_id(self, *, song_id: str) -> list[Result]:
+        ...

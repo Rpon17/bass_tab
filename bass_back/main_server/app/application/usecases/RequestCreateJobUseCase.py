@@ -7,6 +7,7 @@ from app.domain.jobs_domain import Job
 from app.domain.songs_domain import Song
 from app.application.usecases.job.create_job_usecase import CreateJobUseCase
 from app.application.usecases.songs.song_create_usecase import CreateSongUseCase
+from app.application.usecases.songs.result_create_usecase import CreateResultUseCase
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,8 @@ class RequestCreateJobUseCase:
     """
     create_song_uc: CreateSongUseCase
     create_job_uc: CreateJobUseCase
-
+    create_result_uc: CreateResultUseCase
+    
     async def execute(
         self,
         *,

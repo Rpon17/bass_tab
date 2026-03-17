@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 env/
+*.png
 
 # ML models
 pretrained_models/

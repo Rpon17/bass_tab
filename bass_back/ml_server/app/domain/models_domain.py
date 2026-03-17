@@ -28,7 +28,6 @@ class MLJob:
     norm_title: str = None
     norm_artist: str = None
 
-
     status: MLJobStatus = MLJobStatus.QUEUED
     progress: int = 0
     error: str | None = None

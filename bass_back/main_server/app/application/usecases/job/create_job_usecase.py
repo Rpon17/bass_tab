@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from redis.asyncio import Redis
 
 from app.domain.jobs_domain import Job
+from app.domain.results_domain import Result
 from app.application.ports.job_store_port import JobStore
 
 

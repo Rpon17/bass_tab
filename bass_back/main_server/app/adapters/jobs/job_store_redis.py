@@ -24,7 +24,6 @@ class RedisJobStore(JobStore):
         self._r: Redis = redis
         self._p: str = key_prefix or "bass:"
 
-    # ---------- key builders ----------
     def _job_key(self, job_id: str) -> str:
         return f"{self._p}job:{job_id}"
 
@@ -37,7 +36,6 @@ class RedisJobStore(JobStore):
     def _submitted_key(self) -> str:
         return f"{self._p}ml:submitted"
 
-    # ---------- datetime helpers ----------
     @staticmethod
     def _dt_to_str(dt: datetime) -> str:
         return dt.isoformat()
@@ -48,7 +46,6 @@ class RedisJobStore(JobStore):
             return datetime.utcnow()
         return datetime.fromisoformat(s)
 
-    # ---------- decode helpers ----------
     @staticmethod
     def _to_str(v: Any) -> str:
         if v is None:
@@ -64,15 +61,13 @@ class RedisJobStore(JobStore):
             v = h.get(key.encode())
         return cls._to_str(v)
 
-    # ---------- serialize / deserialize ----------
     def _serialize_job(self, job: Job) -> Dict[str, str]:
-        """
-        Redis HASH에는 None을 넣을 수 없으므로 Optional 값은 ""로 저장한다.
-        """
         return {
             "job_id": (job.job_id or "").strip(),
             "song_id": (job.song_id or "").strip(),
             "result_id": (job.result_id or "").strip(),
+            "asset_id": (job.asset_id or "").strip(),
+            "path": (job.path or "").strip(),
             "status": job.status.value,
             "created_at": self._dt_to_str(job.created_at),
             "updated_at": self._dt_to_str(job.updated_at),
@@ -83,21 +78,22 @@ class RedisJobStore(JobStore):
         }
 
     def _deserialize_job(self, h: Dict[Any, Any]) -> Job:
-        """
-        Redis hgetall()은 dict[bytes, bytes]일 수 있으므로
-        str / bytes key 모두 안전하게 처리한다.
-        """
         job_id: str = self._get_str(h, "job_id").strip()
         if not job_id:
-            raise ValueError("Deserialized job has empty job_id (Redis data corrupted)")
+            raise ValueError("Deserialized job has empty job_id")
 
         song_id: str = self._get_str(h, "song_id").strip()
         if not song_id:
-            raise ValueError("Deserialized job has empty song_id (Redis data corrupted)")
+            raise ValueError("Deserialized job has empty song_id")
 
-        # ✅ QUEUED 단계에서는 result_id가 없을 수 있음
         result_id_str: str = self._get_str(h, "result_id").strip()
         result_id: Optional[str] = result_id_str if result_id_str else None
+
+        asset_id_str: str = self._get_str(h, "asset_id").strip()
+        asset_id: Optional[str] = asset_id_str if asset_id_str else None
+
+        path_str: str = self._get_str(h, "path").strip()
+        path: Optional[str] = path_str if path_str else None
 
         status_str: str = (self._get_str(h, "status") or JobStatus.QUEUED.value).strip()
         try:
@@ -109,6 +105,8 @@ class RedisJobStore(JobStore):
             job_id=job_id,
             song_id=song_id,
             result_id=result_id,
+            asset_id=asset_id,
+            path=path,
             status=status,
             created_at=self._str_to_dt(self._get_str(h, "created_at")),
             updated_at=self._str_to_dt(self._get_str(h, "updated_at")),
@@ -118,7 +116,6 @@ class RedisJobStore(JobStore):
             error=(self._get_str(h, "error").strip() or None),
         )
 
-    # ---------- core CRUD ----------
     async def create(self, job: Job, *, ttl_seconds: int = 60 * 30) -> None:
         key: str = self._job_key(job.job_id)
         if await self._r.exists(key):
@@ -144,11 +141,11 @@ class RedisJobStore(JobStore):
     async def save(self, job: Job, *, ttl_seconds: Optional[int] = None) -> None:
         jid: str = (job.job_id or "").strip()
         if not jid:
-            raise ValueError("Job has empty job_id (cannot save)")
+            raise ValueError("Job has empty job_id")
 
         key: str = self._job_key(jid)
         if not await self._r.exists(key):
-            raise ValueError(f"Job not found (cannot save): {jid}")
+            raise ValueError(f"Job not found: {jid}")
 
         data: Dict[str, str] = self._serialize_job(job)
 
@@ -163,7 +160,6 @@ class RedisJobStore(JobStore):
         if jid:
             await self._r.delete(self._job_key(jid))
 
-    # ---------- queue ----------
     async def enqueue(self, queue: str, job_id: str) -> None:
         q: str = (queue or "").strip()
         jid: str = (job_id or "").strip()
@@ -187,7 +183,6 @@ class RedisJobStore(JobStore):
         jid = jid.strip()
         return jid or None
 
-    # ---------- lock ----------
     async def acquire_lock(self, job_id: str, *, token: str, ttl_seconds: int = 600) -> bool:
         jid: str = (job_id or "").strip()
         tok: str = (token or "").strip()
@@ -208,7 +203,6 @@ class RedisJobStore(JobStore):
         if jid:
             await self._r.expire(self._job_key(jid), ttl_seconds)
 
-    # ---------- submitted ----------
     async def add_submitted(self, job_id: str) -> None:
         jid: str = (job_id or "").strip()
         if not jid:

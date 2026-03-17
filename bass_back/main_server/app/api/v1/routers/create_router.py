@@ -1,110 +1,94 @@
 from __future__ import annotations
-
-from datetime import datetime, timezone
-from typing import Literal
-
-from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, HttpUrl
 from redis.asyncio import Redis
 
-from app.infra.redis import get_redis
+# 도메인 및 유스케이스
+from app.domain.jobs_domain import JobStatus
+from app.domain.errors_domain import JobNotFoundError
+from app.application.usecases.RequestCreateJobUseCase import RequestCreateJobUseCase
+from app.application.usecases.job.get_job_usecase import GetJobUseCase
 from app.application.usecases.songs.song_create_usecase import CreateSongUseCase
 from app.application.usecases.songs.result_create_usecase import CreateResultUseCase
+from app.application.services.text_normalize import normalize_text
+
+# 의존성 및 DTO
+from app.infra.redis import get_redis
+from app.api.v1.deps import (
+    get_request_create_job_uc, 
+    get_get_job_uc, 
+    get_create_song_uc, 
+    get_create_result_uc
+)
 from app.api.v1.dto.results_dto import CreateResultRequest, CreateResultResponse
-from app.api.v1.deps import get_create_song_uc, get_create_result_uc
 
+router = APIRouter(prefix="/jobs", tags=["jobs"])
 
-router = APIRouter(tags=["ml-process"])
-print("[ml-process] ROUTER FILE LOADED")
+# --- 모델 ---
+class CreateJobRequest(BaseModel):
+    youtube_url: HttpUrl
+    title: str
+    artist: str
 
+class JobResponse(BaseModel):
+    job_id: str
+    status: JobStatus
+    youtube_url: str | None = None
+    title: str | None = None
+    artist: str | None = None
+    error: str | None = None
 
-class MLProcessRequest(BaseModel):
-    job_id: str = Field(..., description="Job 식별자")
-    song_id: str = Field(..., description="곡 식별자")
-    result_id: str = Field(..., description="결과 식별자")
-    input_wav_path: str = Field(..., description="ML 입력 wav 파일 경로")
-    result_path: str = Field(..., description="결과 저장 루트 경로")
-    norm_title: str | None = None
-    norm_artist: str | None = None
-
-
-class MLProcessResponse(BaseModel):
-    ok: bool
-    status: Literal["queued"]
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _ml_queue_key() -> str:
-    return "ml:queue:process"
-
-
-def _ml_status_key(job_id: str) -> str:
-    return f"ml:status:{job_id}"
-
-
-@router.post(
-    "/v1/process",
-    response_model=MLProcessResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-async def submit_ml_process(
-    body: MLProcessRequest,
-    redis: Redis = Depends(get_redis),
-) -> MLProcessResponse:
-    print("[ml-process] entered")
-    print("[ml-process] body =", body.model_dump())
-    print("[ml-process] redis =", redis)
-    print("[ml-process] redis_type =", type(redis))
-
-    job_id: str = body.job_id
-
-    print("[ml-process] before hset")
-    await redis.hset(
-        _ml_status_key(job_id),
-        mapping={
-            "status": "queued",
-            "song_id": body.song_id,
-            "result_id": body.result_id,
-            "input_wav_path": body.input_wav_path,
-            "result_path": body.result_path,
-            "norm_title": "" if body.norm_title is None else body.norm_title,
-            "norm_artist": "" if body.norm_artist is None else body.norm_artist,
-            "updated_at": _utcnow_iso(),
-        },
-    )
-    print("[ml-process] after hset")
-
-    print("[ml-process] before lpush")
-    await redis.lpush(_ml_queue_key(), job_id)
-    print("[ml-process] after lpush")
-
-    return MLProcessResponse(ok=True, status="queued")
-
-
-@router.post(
-    "/results",
-    response_model=CreateResultResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_song_and_result(
+# --- 통합 엔드포인트: Job 생성 + Song/Result 생성 + ML 큐 등록 ---
+@router.post("", response_model=CreateResultResponse, status_code=status.HTTP_201_CREATED)
+async def create_full_job(
     body: CreateResultRequest,
+    redis: Redis = Depends(get_redis),
+    job_uc: RequestCreateJobUseCase = Depends(get_request_create_job_uc),
     song_uc: CreateSongUseCase = Depends(get_create_song_uc),
     result_uc: CreateResultUseCase = Depends(get_create_result_uc),
 ) -> CreateResultResponse:
-    song = await song_uc.execute(
+    
+    # 1. 기존 Job 생성 로직 실행
+    job = await job_uc.execute(
+        youtube_url=str(body.youtube_url),
         title=body.title,
         artist=body.artist,
     )
-
-    result = await result_uc.execute(
-        song_id=song.song_id,
-        source_url=body.youtube_url,
+    
+    # 2. Song 생성
+    song = await song_uc.execute(title=body.title, artist=body.artist)
+    
+    # 3. Result 생성
+    result = await result_uc.execute(result_id=job.result_id,song_id=song.song_id, source_url=body.youtube_url)
+    
+    # 4. ML 큐 등록
+    norm_title = normalize_text(body.title)
+    norm_artist = normalize_text(body.artist)
+    
+    # ML 프로세스 큐잉
+    await redis.lpush("ml:queue:process", result.result_id)
+    
+    return CreateResultResponse(
+        result_id=result.result_id, 
+        song_id=song.song_id
     )
 
-    return CreateResultResponse(
-        result_id=result.result_id,
-        song_id=result.song_id,
+# --- 조회 엔드포인트 ---
+@router.get("/{job_id}", response_model=JobResponse)
+async def get_job(
+    job_id: str,
+    uc: GetJobUseCase = Depends(get_get_job_uc),
+) -> JobResponse:
+    try:
+        job = await uc.execute(job_id=job_id)
+    except JobNotFoundError:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    return JobResponse(
+        job_id=job.job_id,
+        status=job.status,
+        youtube_url=job.youtube_url,
+        title=job.title,
+        artist=job.artist,
+        error=job.error,
     )

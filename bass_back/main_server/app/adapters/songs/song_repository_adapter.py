@@ -14,6 +14,7 @@ class SongRepositorySqliteAdapter(SongRepositoryPort):
     db_path: str
 
     def _connect(self) -> sqlite3.Connection:
+        print(f"DEBUG: Opening DB at: {self.db_path}")
         conn: sqlite3.Connection = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn

@@ -33,7 +33,7 @@ class FakeDemucsAdapter(DemucsPort):
             setting=setting,
             dsp=dsp,
         )
-        return output_dir / "audio" / "bass_only.wav"
+        return output_dir / "assets" / asset_id / "audio" / "bass_only.wav"
 
     async def split_file(
         self,
@@ -53,7 +53,8 @@ class FakeDemucsAdapter(DemucsPort):
         if self.fake_delay_seconds > 0.0:
             await asyncio.sleep(self.fake_delay_seconds)
 
-        audio_dir: Path = output_dir / "audio"
+        asset_root_dir: Path = output_dir / "assets" / asset_id
+        audio_dir: Path = asset_root_dir / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
 
         original_copy_path: Path = audio_dir / "original.wav"
@@ -61,15 +62,29 @@ class FakeDemucsAdapter(DemucsPort):
         bass_boosted_path: Path = audio_dir / "bass_boosted.wav"
         bass_removed_path: Path = audio_dir / "bass_removed.wav"
 
-        shutil.copy2(input_wav_path, original_copy_path)
-        shutil.copy2(input_wav_path, bass_only_path)
-        shutil.copy2(input_wav_path, bass_boosted_path)
-        shutil.copy2(input_wav_path, bass_removed_path)
+        self._safe_copy(input_wav_path=input_wav_path, target_path=original_copy_path)
+        self._safe_copy(input_wav_path=input_wav_path, target_path=bass_only_path)
+        self._safe_copy(input_wav_path=input_wav_path, target_path=bass_boosted_path)
+        self._safe_copy(input_wav_path=input_wav_path, target_path=bass_removed_path)
 
         self._validate_wav(original_copy_path)
         self._validate_wav(bass_only_path)
         self._validate_wav(bass_boosted_path)
         self._validate_wav(bass_removed_path)
+
+    def _safe_copy(
+        self,
+        *,
+        input_wav_path: Path,
+        target_path: Path,
+    ) -> None:
+        src_resolved: Path = input_wav_path.resolve()
+        dst_resolved: Path = target_path.resolve()
+
+        if src_resolved == dst_resolved:
+            return
+
+        shutil.copy2(input_wav_path, target_path)
 
     def _validate_wav(self, wav_path: Path) -> None:
         with wave.open(str(wav_path), "rb") as wf:

@@ -1,4 +1,3 @@
-# main_server/app/api/v1/deps.py
 from __future__ import annotations
 
 from functools import lru_cache
@@ -15,36 +14,37 @@ from app.application.ports.song_repository_port import SongRepositoryPort
 from app.application.ports.result_repostiroty_port import ResultRepositoryPort
 from app.application.ports.asset_repository_port import AssetRepositoryPort
 
+from app.adapters.front_back_adapter import FrontBackSqliteAdapter
 from app.adapters.songs.song_repository_adapter import SongRepositorySqliteAdapter
 from app.adapters.songs.result_repository_adapter import ResultRepositorySqliteAdapter
 from app.adapters.songs.asset_repository_adapter import AssetRepositorySqliteAdapter
 
+from app.application.usecases.front_back_usecase import FrontBackUsecase 
 from app.application.usecases.job.create_job_usecase import CreateJobUseCase
+from app.application.usecases.job.get_job_usecase import GetJobUseCase
 from app.application.usecases.RequestCreateJobUseCase import RequestCreateJobUseCase
 from app.application.usecases.songs.song_create_usecase import CreateSongUseCase
 from app.application.usecases.songs.result_create_usecase import CreateResultUseCase
+from app.application.usecases.songs.asset_create_usecase import CreateAssetUseCase
 from app.application.usecases.songs.song_search_usecase import SearchSongsUseCase
-
+from app.application.usecases.songs.get_results_by_song_usecase import GetResultsBySongUseCase
 
 # ------------------------------------------------------------
-# 경로지정
+# db index 경로지정
 # ------------------------------------------------------------
 @lru_cache
 def get_paths() -> dict[str, Path]:
-    """
-    실행 위치가 어디든 흔들리지 않는 경로 결정
-    """
-    base_dir: Path = Path(__file__).resolve().parents[2]  # .../main_server/app
-    project_dir: Path = base_dir.parent  # .../main_server
+    base_dir: Path = Path(__file__).resolve().parents[2]
+    project_dir: Path = base_dir.parent
 
-    var_dir: Path = project_dir / "var"
-    var_dir.mkdir(parents=True, exist_ok=True)
+    db_dir: Path = project_dir / "db" / "data"
+    db_dir.mkdir(parents=True, exist_ok=True)
 
-    db_path: Path = var_dir / "index.db"
+    db_path: Path = db_dir / "index.db"
 
     return {
         "project_dir": project_dir,
-        "var_dir": var_dir,
+        "db_dir": db_dir,
         "db_path": db_path,
     }
 
@@ -93,7 +93,12 @@ def get_asset_repo() -> AssetRepositoryPort:
     return AssetRepositorySqliteAdapter(
         db_path=get_db_path(),
     )
-
+    
+@lru_cache
+def get_front_back_adapter() -> FrontBackSqliteAdapter:
+    return FrontBackSqliteAdapter(
+        db_path=get_db_path(), 
+    )
 
 # ------------------------------------------------------------
 # song_usecase
@@ -120,7 +125,17 @@ def get_create_result_uc() -> CreateResultUseCase:
     return CreateResultUseCase(
         result_repository=get_result_repo(),
     )
-
+    
+    
+# ------------------------------------------------------------
+# Asset UseCases
+# ------------------------------------------------------------
+@lru_cache
+def get_create_asset_uc() -> CreateAssetUseCase:
+    return CreateAssetUseCase(
+        asset_repository=get_asset_repo(),
+    )
+    
 
 # ------------------------------------------------------------
 # Job UseCases
@@ -133,6 +148,13 @@ def get_create_job_uc() -> CreateJobUseCase:
     )
 
 
+@lru_cache
+def get_get_job_uc() -> GetJobUseCase:
+    return GetJobUseCase(
+        job_store=get_job_store(),
+    )
+
+
 # ------------------------------------------------------------
 # Orchestration UseCases
 # ------------------------------------------------------------
@@ -142,4 +164,18 @@ def get_request_create_job_uc() -> RequestCreateJobUseCase:
         create_song_uc=get_create_song_uc(),
         create_result_uc=get_create_result_uc(),
         create_job_uc=get_create_job_uc(),
+    )
+    
+@lru_cache
+def get_get_results_by_song_uc() -> GetResultsBySongUseCase:
+    return GetResultsBySongUseCase(result_repository=get_result_repo())
+
+
+@lru_cache
+def get_front_back_uc() -> FrontBackUsecase:
+    adapter = get_front_back_adapter()
+    
+    return FrontBackUsecase(
+        repository=adapter,
+        base_url="http://localhost:8000"
     )

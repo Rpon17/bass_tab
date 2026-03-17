@@ -1,16 +1,13 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
-
 from app.application.services.now_time import utc_now_iso
-
 
 @dataclass(frozen=True)
 class Result:
     result_id: str
     song_id: str
     source_url: str
-    status: str = "linked"
+    status: str = "queued"
     error_message: str | None = None
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -22,7 +19,7 @@ class Result:
         result_id: str,
         song_id: str,
         source_url: str,
-        status: str = "linked",
+        status: str = "queued",
         error_message: str | None = None,
     ) -> "Result":
         now: str = utc_now_iso()

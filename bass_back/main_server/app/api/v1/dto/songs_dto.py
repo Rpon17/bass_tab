@@ -14,7 +14,6 @@ class CreateSongRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     artist: str = Field(..., min_length=1, max_length=200)
 
-
 class CreateSongResponse(BaseModel):
     song_id: str
     title: str

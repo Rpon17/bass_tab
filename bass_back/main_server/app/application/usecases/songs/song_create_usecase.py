@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import uuid
 
-from bass_back.main_server.app.application.ports.song_repository_port import SongRepositoryPort
+from app.application.ports.song_repository_port import SongRepositoryPort
 from app.application.services.text_normalize import normalize_text
 from app.domain.songs_domain import Song
 
@@ -49,4 +49,5 @@ class CreateSongUseCase:
         )
 
         await self.song_repository.save(song=song)
+        print("song 테이블 생성완료")
         return song

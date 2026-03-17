@@ -1,15 +1,16 @@
+# main_server/app/application/usecases/songs/asset_create_usecase.py
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.application.ports.asset_repository_port import AssetRepositoryPort
-from app.domain.results_domain import Result
+from app.domain.asset_domain import Asset
 from app.application.services.path_maker import audio_path, tab_path
 
 
 @dataclass(frozen=True)
-class CreateResultUseCase:
+class CreateAssetUseCase:
     asset_repository: AssetRepositoryPort
 
     async def execute(
@@ -18,18 +19,24 @@ class CreateResultUseCase:
         result_id: str,
         asset_id: str,
         path: str,
-    ) -> Result:
+    ) -> Asset:
+        existing: Asset | None = await self.asset_repository.get_by_result_id(
+            result_id=result_id,
+        )
+        if existing is not None:
+            return existing
+
         base_path: Path = Path(path)
 
-        asset: Result = Result.create(
-            asset_id_=asset_id,
-            result_id_=result_id,
-            original_audio_path_=audio_path(base_path, "original.wav"),
-            bass_only_path_=audio_path(base_path, "bass_only.wav"),
-            bass_removed_path_=audio_path(base_path, "bass_removed.wav"),
-            bass_boosted_path_=audio_path(base_path, "bass_boosted.wav"),
-            original_tab_path_=tab_path(base_path, "original_tab.json"),
-            root_tab_path_=tab_path(base_path, "root_tab.json"),
+        asset: Asset = Asset(
+            asset_id=asset_id,
+            result_id=result_id,
+            original_audio_path=audio_path(base_path,asset_id, "original.wav"),
+            bass_only_path=audio_path(base_path,asset_id, "bass_only.wav"),
+            bass_removed_path=audio_path(base_path,asset_id, "bass_removed.wav"),
+            bass_boosted_path=audio_path(base_path,asset_id, "bass_boosted.wav"),
+            original_tab_path=tab_path(base_path,asset_id, "original_tab.json"),
+            root_tab_path=tab_path(base_path,asset_id, "root_tab.json"),
         )
 
         await self.asset_repository.save(asset=asset)

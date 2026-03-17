@@ -151,4 +151,5 @@ class SongRepositorySqliteAdapter(SongRepositoryPort):
             )
             conn.commit()
         finally:
+            print("song테이블저장완료")
             conn.close()

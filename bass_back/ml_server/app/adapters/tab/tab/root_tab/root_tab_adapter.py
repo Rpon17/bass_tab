@@ -242,7 +242,7 @@ class RootTabGenerateAdapter:
         output_dir: Path,
         asset_id: str,
     ) -> Path:
-        asset_dir: Path = Path(output_dir) / "asset" / str(asset_id)
+        asset_dir: Path = Path(output_dir) / "assets" / str(asset_id)
         tab_dir: Path = asset_dir / "tab"
         tab_dir.mkdir(parents=True, exist_ok=True)
         return tab_dir / self.output_filename

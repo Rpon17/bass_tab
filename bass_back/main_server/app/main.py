@@ -1,24 +1,30 @@
 from __future__ import annotations
-
+import os
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
-# 네 라우터 경로에 맞게 import 경로를 조정해줘.
-# 예시: app/api/v1/routers/jobs.py, app/api/v1/routers/ml_connect.py 등이 있다고 가정.
-from app.api.v1.routers import jobs  # type: ignore
-# 만약 ml_connect를 쓰고 있으면 아래도 include 가능(지금은 1번 구조라 필수 아님)
-# from app.api.v1.routers import ml_connect  # type: ignore
-
+from app.api.v1.routers.create_router import router as create_router
+from app.api.v1.routers.front_back_router import router as song_search_router
 
 def create_app() -> FastAPI:
-    app: FastAPI = FastAPI(title="main_server")
+    app: FastAPI = FastAPI(title="Bass Project Main Server")
 
-    # v1 라우터 등록
-    app.include_router(jobs.router, prefix="/v1")
+    # CORS 설정
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-    # (선택) 브리지 라우터 등록 - 1번(직통)에서는 없어도 됨
-    # app.include_router(ml_connect.router, prefix="/v1")
+    app.include_router(create_router, prefix="/v1")
+    app.include_router(song_search_router, prefix="/v1/songs")
+
+    storage_path = os.getenv("STORAGE_ROOT", "C:/bass_project/storage")
+    if os.path.exists(storage_path):
+        app.mount("/files", StaticFiles(directory=storage_path), name="storage")
 
     return app
-
 
 app: FastAPI = create_app()

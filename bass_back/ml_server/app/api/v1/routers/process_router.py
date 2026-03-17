@@ -1,3 +1,4 @@
+# ml_server/app/api/v1/routers/process_router.py
 from __future__ import annotations
 
 import os
@@ -74,7 +75,7 @@ async def submit_process(
     asset_id: str = uuid.uuid4().hex
     print("[ml-process] generated asset_id =", asset_id)
 
-    now: datetime = datetime.utcnow()
+    now: str = datetime.utcnow().isoformat()
 
     job: MLJob = MLJob(
         job_id=request.job_id,
@@ -92,7 +93,7 @@ async def submit_process(
         created_at=now,
         updated_at=now,
     )
-    
+
     print("[ml-process] MLJob object created")
     print("[ml-process] job =", job)
     print("[ml-process] job.output_dir =", job.output_dir)
