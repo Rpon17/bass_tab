@@ -1,0 +1,22 @@
+.song-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin-top: 20px;
+}
+
+.song-item {
+  display: flex;
+  align-items: center;
+  padding: 15px;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+}
+
+.info {
+  margin-left: 15px;
+  flex-grow: 1;
+}
+
+.title { font-weight: bold; font-size: 1.1em; }
+.artist { color: #666; }

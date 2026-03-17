@@ -1,0 +1,20 @@
+# Web Framework & Server
+fastapi==0.128.0
+uvicorn==0.40.0
+
+# Database & ORM
+SQLAlchemy==2.0.48
+psycopg2-binary==2.9.11
+redis==7.1.0
+
+# Environment & Utility
+python-dotenv==1.2.2
+pydantic==2.12.5
+httpx==0.28.1
+
+# YouTube Download
+yt-dlp==2026.2.4
+
+# Core dependencies (Optional but recommended to pin)
+anyio==4.12.1
+starlette==0.50.0

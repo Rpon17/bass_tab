@@ -1,0 +1,3 @@
+web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+submit_worker: python -m app.worker.submit_worker
+comm_worker: python -m app.worker.communicate_worker

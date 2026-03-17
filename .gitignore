@@ -1,0 +1,88 @@
+!requirements.txt
+!README.md
+
+# 무거운 폴더들 무조건 제외
+**/pretrained_models/
+**/.venv/
+**/venv/
+**/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+*.png
+
+# ML models
+pretrained_models/
+.venv/
+pretrained_models/
+# Node / Front
+node_modules/
+dist/
+build/
+
+# Env
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# 음원
+.wav
+.mp3
+.json
+# Job outputs
+data/
+outputs/
+tmp/
+
+# Environment
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# db
+db/data/index.db
+
+# secret
+.md
+
+
+
+.
+
+# IDE
+.vscode/
+.idea/
+
+# storage (important)
+storage/
+
+# python build
+*.egg-info/
+.eggs/
+
+# testing
+.pytest_cache/
+.coverage
+
+# sqlite
+*.sqlite
+*.sqlite3
+
+# redis
+dump.rdb
+
