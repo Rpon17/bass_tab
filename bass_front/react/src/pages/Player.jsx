@@ -19,7 +19,7 @@ function Player() {
   const currentBarRef = useRef(null);
 
   // ✅ 백엔드 베이스 URL 설정
-  const API_BASE_URL = 'https://bass-main-server.onrender.com';
+  const API_BASE_URL = 'https://bass-project-main-server.onrender.com';
 
   useEffect(() => {
     if (songData?.[tabMode]) {
