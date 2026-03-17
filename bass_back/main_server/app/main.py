@@ -17,6 +17,7 @@ def create_app() -> FastAPI:
     origins = [
         "http://localhost:5173",
         "https://bass-project-front-react.onrender.com",
+        "https://bass-project-front-react.onrender.com/",
     ]
 
     app.add_middleware(
