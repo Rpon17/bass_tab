@@ -5,24 +5,26 @@ from pathlib import Path
 
 # 환경 변수 로드를 위해 추가
 from dotenv import load_dotenv
-from redis.asyncio import Redis, from_url # from_url 추가 (배포용)
+from redis.asyncio import Redis, from_url 
 
 # .env 파일 읽기
 load_dotenv()
 
-# infra/redis.py 대신 여기서 직접 생성하거나 infra 쪽을 수정해서 사용
+# 어댑터 및 포트 임포트
 from app.adapters.jobs.job_store_redis import RedisJobStore
-
 from app.application.ports.job_store_port import JobStore
+from app.application.ports.front_back_port import FrontBackRepositoryPort
 from app.application.ports.song_repository_port import SongRepositoryPort
 from app.application.ports.result_repostiroty_port import ResultRepositoryPort
 from app.application.ports.asset_repository_port import AssetRepositoryPort
 
-from app.adapters.front_back_adapter import FrontBackSqliteAdapter
-from app.adapters.songs.song_repository_adapter import SongRepositorySqliteAdapter
-from app.adapters.songs.result_repository_adapter import ResultRepositorySqliteAdapter
-from app.adapters.songs.asset_repository_adapter import AssetRepositorySqliteAdapter
+# ✅ Postgres 어댑터들
+from app.adapters.front_back_adapter import FrontBackPostgresAdapter
+from app.adapters.songs.song_repository_adapter import SongRepositoryPostgresAdapter
+from app.adapters.songs.result_repository_adapter import ResultRepositoryPostgresAdapter
+from app.adapters.songs.asset_repository_adapter import AssetRepositoryPostgresAdapter
 
+# 유스케이스들
 from app.application.usecases.front_back_usecase import FrontBackUsecase 
 from app.application.usecases.job.create_job_usecase import CreateJobUseCase
 from app.application.usecases.job.get_job_usecase import GetJobUseCase
@@ -38,7 +40,11 @@ from app.application.usecases.songs.get_results_by_song_usecase import GetResult
 # ------------------------------------------------------------
 @lru_cache
 def get_db_url() -> str:
-    return os.getenv("DATABASE_URL", "sqlite:///./index.db")
+    # 💡 Render/Supabase 연결을 위해 postgres:// 를 postgresql:// 로 자동 변환
+    url = os.getenv("DATABASE_URL", "sqlite:///./index.db")
+    if url and url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return url
 
 @lru_cache
 def get_api_base_url() -> str:
@@ -52,7 +58,6 @@ def get_redis_client() -> Redis:
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     return from_url(redis_url, decode_responses=True)
 
-
 @lru_cache
 def get_job_store() -> JobStore:
     return RedisJobStore(
@@ -60,94 +65,60 @@ def get_job_store() -> JobStore:
         key_prefix="bass:",
     )
 
-
 # ------------------------------------------------------------
-# 포트에 어댑터 주입 (환경 변수 적용)
+# ✅ 포트에 어댑터 주입 (매개변수명을 db_url로 일치시킴)
 # ------------------------------------------------------------
 @lru_cache
 def get_song_repo() -> SongRepositoryPort:
-    return SongRepositorySqliteAdapter(
-        db_path=get_db_url(),
+    return SongRepositoryPostgresAdapter(
+        db_url=get_db_url(), # 👈 db_path에서 db_url로 수정
     )
-
 
 @lru_cache
 def get_result_repo() -> ResultRepositoryPort:
-    return ResultRepositorySqliteAdapter(
-        db_path=get_db_url(),
+    return ResultRepositoryPostgresAdapter(
+        db_url=get_db_url(), # 👈 db_path에서 db_url로 수정
     )
-
 
 @lru_cache
 def get_asset_repo() -> AssetRepositoryPort:
-    return AssetRepositorySqliteAdapter(
-        db_path=get_db_url(),
+    return AssetRepositoryPostgresAdapter(
+        db_url=get_db_url(), # 👈 db_path에서 db_url로 수정
     )
     
 @lru_cache
-def get_front_back_adapter() -> FrontBackSqliteAdapter:
-    return FrontBackSqliteAdapter(
-        db_path=get_db_url(), 
+def get_front_back_adapter() -> FrontBackRepositoryPort:
+    return FrontBackPostgresAdapter(
+        db_url=get_db_url(), # 👈 db_path에서 db_url로 수정
     )
 
 # ------------------------------------------------------------
-# song_usecase
+# 이후 UseCase 생성 함수들은 기존과 동일 (생략 없이 그대로 사용하면 됨)
 # ------------------------------------------------------------
 @lru_cache
 def get_create_song_uc() -> CreateSongUseCase:
-    return CreateSongUseCase(
-        song_repository=get_song_repo(),
-    )
-
+    return CreateSongUseCase(song_repository=get_song_repo())
 
 @lru_cache
 def get_search_songs_uc() -> SearchSongsUseCase:
-    return SearchSongsUseCase(
-        song_repository=get_song_repo(),
-    )
+    return SearchSongsUseCase(song_repository=get_song_repo())
 
-
-# ------------------------------------------------------------
-# Result UseCases
-# ------------------------------------------------------------
 @lru_cache
 def get_create_result_uc() -> CreateResultUseCase:
-    return CreateResultUseCase(
-        result_repository=get_result_repo(),
-    )
+    return CreateResultUseCase(result_repository=get_result_repo())
     
-    
-# ------------------------------------------------------------
-# Asset UseCases
-# ------------------------------------------------------------
 @lru_cache
 def get_create_asset_uc() -> CreateAssetUseCase:
-    return CreateAssetUseCase(
-        asset_repository=get_asset_repo(),
-    )
+    return CreateAssetUseCase(asset_repository=get_asset_repo())
     
-
-# ------------------------------------------------------------
-# Job UseCases
-# ------------------------------------------------------------
 @lru_cache
 def get_create_job_uc() -> CreateJobUseCase:
-    return CreateJobUseCase(
-        job_store=get_job_store(),
-        queue_name="youtube",
-    )
-
+    return CreateJobUseCase(job_store=get_job_store(), queue_name="youtube")
 
 @lru_cache
 def get_get_job_uc() -> GetJobUseCase:
-    return GetJobUseCase(
-        job_store=get_job_store(),
-    )
+    return GetJobUseCase(job_store=get_job_store())
 
-
-# ------------------------------------------------------------
-# Orchestration UseCases
-# ------------------------------------------------------------
 @lru_cache
 def get_request_create_job_uc() -> RequestCreateJobUseCase:
     return RequestCreateJobUseCase(
@@ -160,11 +131,9 @@ def get_request_create_job_uc() -> RequestCreateJobUseCase:
 def get_get_results_by_song_uc() -> GetResultsBySongUseCase:
     return GetResultsBySongUseCase(result_repository=get_result_repo())
 
-
 @lru_cache
 def get_front_back_uc() -> FrontBackUsecase:
     adapter = get_front_back_adapter()
-    
     return FrontBackUsecase(
         repository=adapter,
         base_url=get_api_base_url() 
