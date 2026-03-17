@@ -1,88 +1,38 @@
-!requirements.txt
-!README.md
-
-# 무거운 폴더들 무조건 제외
-**/pretrained_models/
+# [필수 제외 항목] - 어디에 있든 무조건 제외
 **/.venv/
 **/venv/
-**/.env
+**/env/
+**/node_modules/
+**/__pycache__/
+**/.DS_Store
 
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.venv/
-venv/
-env/
-*.png
-
-# ML models
-pretrained_models/
-.venv/
-pretrained_models/
-# Node / Front
-node_modules/
+# [빌드 결과물 및 데이터]
 dist/
 build/
+**/pretrained_models/
+**/storage/
+**/data/
+**/outputs/
+**/tmp/
+**/db/data/
 
-# Env
-.env
-.env.*
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# 음원
-.wav
-.mp3
-.json
-# Job outputs
-data/
-outputs/
-tmp/
-
-# Environment
-.env
-.env.*
-
-# Logs
-*.log
-logs/
-
-# db
-db/data/index.db
-
-# secret
-.md
-
-
-
-.
-
-# IDE
+# [보안 및 설정]
+**/.env
+**/.env.*
 .vscode/
 .idea/
 
-# storage (important)
-storage/
-
-# python build
-*.egg-info/
-.eggs/
-
-# testing
-.pytest_cache/
-.coverage
-
-# sqlite
+# [파일 확장자 기준 제외]
+*.pyc
+*.wav
+*.mp3
+*.log
 *.sqlite
 *.sqlite3
-
-# redis
 dump.rdb
 
+# --- 절대 무시하지 말아야 할 파일들 (화이트리스트) ---
+!requirements.txt
+!README.md
+!package.json
+!package-lock.json
