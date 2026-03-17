@@ -33,7 +33,7 @@ function Create() {
 
     try {
       // ✅ Render에 배포된 백엔드 주소로 변경!
-      const response = await fetch('https://bass-main-server.onrender.com', {
+      const response = await fetch('https://bass-main-server.onrender.com/v1/jobs', {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json' 
