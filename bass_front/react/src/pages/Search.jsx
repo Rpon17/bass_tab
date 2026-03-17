@@ -12,7 +12,7 @@ function Search() {
 
     try {
       // ✅ Render에 배포된 백엔드 주소로 변경!
-      const response = await fetch(`https://bass_main_server.onrender.com/v1/songs/search?q=${query}`);
+      const response = await fetch(`https://bass-project-main-server.onrender.com/v1/songs/search?q=${query}`);
       const data = await response.json();
 
       // ✅ [중복 제거 로직 추가]
