@@ -23,3 +23,5 @@ pydantic
 requests
 tqdm
 numpy
+
+sqlalchemy
