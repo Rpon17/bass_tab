@@ -16,23 +16,21 @@ def create_app() -> FastAPI:
 
     origins = [
         "http://localhost:5173",
-        os.getenv("FRONTEND_URL", ""),
+        "https://bass-project-front-react.onrender.com",
     ]
-
-    origins = [origin for origin in origins if origin]
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=origins if origins else ["*"], 
+        allow_origins=origins, 
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["*"],    
+        allow_headers=["*"],    
     )
 
     app.include_router(create_router, prefix="/v1")
     app.include_router(song_search_router, prefix="/v1/songs")
 
-    storage_path = os.getenv("STORAGE_ROOT", "C:/bass_project/storage")
+    storage_path = os.getenv("STORAGE_ROOT", "/opt/render/project/src/storage")
     
     if not os.path.exists(storage_path):
         os.makedirs(storage_path, exist_ok=True)
