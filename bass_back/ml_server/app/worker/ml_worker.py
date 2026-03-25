@@ -5,6 +5,7 @@ import os
 import signal
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
 import redis.asyncio as redis
 
 from app.adapters.job.job_store_redis import RedisJobStore
@@ -55,17 +56,21 @@ def build_usecase(*, store: RedisJobStore) -> RunMLProcessUseCase:
     from app.adapters.tab.tab.origianal_tab.original_tab_adapter import OriginalTabGenerateAdapter
     from app.adapters.tab.tab.origianal_tab.viterbi_adapter import BassTabViterbiAdapter
     from app.adapters.tab.tab.root_tab.root_tab_adapter import RootTabGenerateAdapter
-
+    from app.adapters.ml_supabase_adapter import SupabaseAudioHandler
     candidate_builder: BassTabCandidateBuilderAdapter = BassTabCandidateBuilderAdapter()
     viterbi: BassTabViterbiAdapter = BassTabViterbiAdapter()
-
+    
+    handler: SupabaseAudioHandler = SupabaseAudioHandler()
+    
     original_tab_generator: OriginalTabGenerateAdapter = OriginalTabGenerateAdapter(
         candidate_builder=candidate_builder,
         viterbi=viterbi,
+        handler=handler
     )
 
     root_tab_generator: RootTabGenerateAdapter = RootTabGenerateAdapter(
         candidate_builder=candidate_builder,
+        handler=handler,
     )
 
     return RunMLProcessUseCase(
@@ -87,11 +92,18 @@ def build_usecase(*, store: RedisJobStore) -> RunMLProcessUseCase:
 
 
 def build_request_from_job(job: MLJob) -> MLProcessRequestDTO:
+    input_path = str(job.input_wav_path)
+    if "https:/" in input_path or "http:/" in input_path:
+        if "https:/" in input_path and "https://" not in input_path:
+            input_path = input_path.replace("https:/", "https://")
+    
+    
+    
     return MLProcessRequestDTO(
         job_id=job.job_id,
         song_id=job.song_id,
         result_id=job.result_id,
-        input_wav_path=str(job.input_wav_path),
+        input_wav_path=input_path,
         result_path=str(job.output_dir),
         norm_title=job.norm_title,
         norm_artist=job.norm_artist,
@@ -176,6 +188,7 @@ async def worker_loop(cfg: MLWorkerConfig) -> None:
 
 
 def main() -> None:
+    load_dotenv()
     cfg: MLWorkerConfig = MLWorkerConfig(
         redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
         key_prefix=os.getenv("ML_JOB_KEY_PREFIX", "bass:ml:"),
@@ -183,9 +196,9 @@ def main() -> None:
         job_ttl_seconds=int(os.getenv("JOB_TTL_SECONDS", "3600")),
     )
 
-    print("[ml-worker] redis_url:", cfg.redis_url)
-    print("[ml-worker] key_prefix:", cfg.key_prefix)
-    print("[ml-worker] queue_name:", cfg.queue_name)
+    print(f"[ml-worker-test] redis_url: {cfg.redis_url}") 
+    print(f"[ml-worker-test] key_prefix: {cfg.key_prefix}")
+    print(f"[ml-worker-test] queue_name: {cfg.queue_name}")
 
     asyncio.run(worker_loop(cfg))
 

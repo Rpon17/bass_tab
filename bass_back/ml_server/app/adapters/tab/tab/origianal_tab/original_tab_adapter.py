@@ -21,11 +21,17 @@ from app.application.ports.tab.tab.original_tab.viterbi_port import (
     BassTabViterbiStepDTO,
 )
 
+from app.adapters.ml_supabase_adapter import SupabaseAudioHandler
+
+def _log_step(message: str) -> None:
+    print(f"[original_tab] {message}")
+
 
 @dataclass(frozen=True)
 class OriginalTabGenerateAdapter(OriginalTabGeneratePort):
     candidate_builder: BassTabCandidateBuilderPort
     viterbi: BassTabViterbiPort
+    handler: SupabaseAudioHandler  
     output_filename: str = "original_tab.json"
 
     beats_per_bar: int = 4
@@ -36,90 +42,93 @@ class OriginalTabGenerateAdapter(OriginalTabGeneratePort):
         default_factory=BassTabViterbiParams
     )
 
-    def tab_generate(
+    async def tab_generate(
         self,
         *,
         original_json: list[BasicPitchNoteEventDTO],
         bpm: int,
-        output_dir: Path,
+        output_dir: str,  # Path에서 str(URL)로 변경
         asset_id: str,
-    ) -> Path:
+    ) -> bool:  # 반환 타입을 업로드 성공 여부(bool)로 변경
         if bpm <= 0:
             raise ValueError("bpm must be > 0")
         if self.beats_per_bar <= 0:
             raise ValueError("beats_per_bar must be > 0")
 
+        # 1. 노트 필터링 및 정렬
         filtered_notes: list[BasicPitchNoteEventDTO] = self._filter_notes(notes=original_json)
 
-        original_tab_path: Path = self._build_output_path(
-            output_dir=output_dir,
-            asset_id=asset_id,
-        )
-
-        if not filtered_notes:
-            self._write_json(
-                output_path=original_tab_path,
-                bars=[],
+        bars: list[BassTabBarDTO] = []
+        if filtered_notes:
+            sorted_notes: list[BasicPitchNoteEventDTO] = sorted(
+                filtered_notes,
+                key=lambda x: (float(x.start_time), float(x.end_time), int(x.pitch_midi)),
             )
-            return original_tab_path
 
-        sorted_notes: list[BasicPitchNoteEventDTO] = sorted(
-            filtered_notes,
-            key=lambda x: (float(x.start_time), float(x.end_time), int(x.pitch_midi)),
-        )
+            # 2. 후보군 빌드 및 Viterbi 디코딩 (기존 로직 유지)
+            raw_candidates: list[list[BassTabCandidateDTO]] = self.candidate_builder.build_candidates(
+                notes=sorted_notes,
+                params=self.candidate_params,
+            )
 
-        raw_candidates: list[list[BassTabCandidateDTO]] = self.candidate_builder.build_candidates(
-            notes=sorted_notes,
-            params=self.candidate_params,
-        )
+            valid_notes: list[BasicPitchNoteEventDTO] = []
+            valid_candidates: list[list[BassTabCandidateDTO]] = []
+            
+            for i, one_candidates in enumerate(raw_candidates):
+                if not one_candidates:
+                    continue
+                valid_notes.append(sorted_notes[i])
+                valid_candidates.append(one_candidates)
 
-        valid_notes: list[BasicPitchNoteEventDTO] = []
-        valid_candidates: list[list[BassTabCandidateDTO]] = []
-        skipped_count: int = 0
-
-        for i, one_candidates in enumerate(raw_candidates):
-            if not one_candidates:
-                note: BasicPitchNoteEventDTO = sorted_notes[i]
-                skipped_count += 1
-                print(
-                    f"[SKIP NO CANDIDATE] idx={i} "
-                    f"pitch={int(note.pitch_midi)} "
-                    f"start={float(note.start_time)} "
-                    f"end={float(note.end_time)}"
+            if valid_notes:
+                steps: list[BassTabViterbiStepDTO] = self.viterbi.decode(
+                    notes=valid_notes,
+                    candidates=valid_candidates,
+                    bpm=int(bpm),
+                    params=self.viterbi_params,
                 )
-                continue
 
-            valid_notes.append(sorted_notes[i])
-            valid_candidates.append(one_candidates)
+                # 3. 마디 그룹화
+                bars = self._group_steps_by_bar(
+                    steps=steps,
+                    bpm=int(bpm),
+                    beats_per_bar=int(self.beats_per_bar),
+                )
 
-        if skipped_count > 0:
-            print(f"[TAB GENERATE] skipped_no_candidate={skipped_count}")
+        # 4. JSON 페이로드 생성
+        payload = self._create_json_payload(bars=bars)
 
-        if not valid_notes:
-            self._write_json(
-                output_path=original_tab_path,
-                bars=[],
-            )
-            return original_tab_path
+        # 5. 업로드 목적지 URL 구성 및 업로드
+        target_upload_url = f"{output_dir.rstrip('/')}/asset/{asset_id}/tab/{self.output_filename}"
+        
+        _log_step(f"📤 결과 업로드 중... ({target_upload_url})")
 
-        steps: list[BassTabViterbiStepDTO] = self.viterbi.decode(
-            notes=valid_notes,
-            candidates=valid_candidates,
-            bpm=int(bpm),
-            params=self.viterbi_params,
+        success = await self.handler.upload_json_to_supabase(
+            payload=payload,
+            target_supabase_url=target_upload_url
         )
+        
+        return success
 
-        bars: list[BassTabBarDTO] = self._group_steps_by_bar(
-            steps=steps,
-            bpm=int(bpm),
-            beats_per_bar=int(self.beats_per_bar),
-        )
-
-        self._write_json(
-            output_path=original_tab_path,
-            bars=bars,
-        )
-        return original_tab_path
+    def _create_json_payload(self, bars: list[BassTabBarDTO]) -> list[dict]:
+        """DTO 데이터를 직렬화 가능한 딕셔너리 리스트로 변환합니다."""
+        payload: list[dict] = []
+        for bar in bars:
+            payload.append({
+                "bar_index": int(bar.bar_index),
+                "start_time": float(bar.start_time),
+                "end_time": float(bar.end_time),
+                "notes": [
+                    {
+                        "time": float(note.time),
+                        "offset": float(note.offset),
+                        "line": int(note.line),
+                        "fret": int(note.fret),
+                    }
+                    for note in bar.notes
+                ],
+            })
+        return payload
 
     def _filter_notes(
         self,
@@ -144,11 +153,7 @@ class OriginalTabGenerateAdapter(OriginalTabGeneratePort):
     ) -> list[BassTabBarDTO]:
         if not steps:
             return []
-        if bpm <= 0:
-            raise ValueError("bpm must be > 0")
-        if beats_per_bar <= 0:
-            raise ValueError("beats_per_bar must be > 0")
-
+        
         seconds_per_beat: float = 60.0 / float(bpm)
         bar_seconds: float = seconds_per_beat * float(beats_per_bar)
 
@@ -190,44 +195,3 @@ class OriginalTabGenerateAdapter(OriginalTabGeneratePort):
             )
 
         return out
-
-    def _build_output_path(
-        self,
-        *,
-        output_dir: Path,
-        asset_id: str,
-    ) -> Path:
-        asset_dir: Path = Path(output_dir) / "assets" / str(asset_id)
-        tab_dir: Path = asset_dir / "tab"
-        tab_dir.mkdir(parents=True, exist_ok=True)
-        return tab_dir / self.output_filename
-
-    def _write_json(
-        self,
-        *,
-        output_path: Path,
-        bars: list[BassTabBarDTO],
-    ) -> None:
-        payload: list[dict[str, object]] = []
-        for bar in bars:
-            payload.append(
-                {
-                    "bar_index": int(bar.bar_index),
-                    "start_time": float(bar.start_time),
-                    "end_time": float(bar.end_time),
-                    "notes": [
-                        {
-                            "time": float(note.time),
-                            "offset": float(note.offset),
-                            "line": int(note.line),
-                            "fret": int(note.fret),
-                        }
-                        for note in bar.notes
-                    ],
-                }
-            )
-
-        output_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )

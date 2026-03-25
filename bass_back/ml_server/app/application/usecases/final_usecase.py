@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import traceback
 import uuid
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from dotenv import load_dotenv
 
 from shared.dtos.main_ml_dto import (
     MLProcessRequestDTO,
@@ -64,6 +66,10 @@ from app.adapters.tab.tab.root_tab.root_tab_adapter import RootTabGenerateAdapte
 
 from app.domain.models_domain import MLJob
 
+load_dotenv()
+
+storage_root_str = os.getenv("STORAGE_ROOT", "./storage")
+storage_root = Path(storage_root_str)
 
 @dataclass(frozen=True)
 class RunMLProcessUseCase:
@@ -102,27 +108,12 @@ class RunMLProcessUseCase:
         else:
             print(f"[USECASE] 기존 asset_id 사용 asset_id={job.asset_id}")
 
-        asset_root_path: Path = Path(job.output_dir)
-        input_wav_path: Path = Path(job.input_wav_path)
-        asset_dir: Path = self._build_asset_dir(
-            asset_root_path=asset_root_path,
-            asset_id=job.asset_id,
-        )
+        base_url = str(job.output_dir).rstrip("/")
+        
 
         print("[USECASE] job 조회 완료")
-        print(f"[USECASE] input_wav_path={input_wav_path}")
-        print(f"[USECASE] asset_root_path={asset_root_path}")
-        print(f"[USECASE] asset_dir={asset_dir}")
 
         try:
-            stage = "prepare_dirs"
-            print("[USECASE] prepare_dirs 시작")
-            self._prepare_dirs(
-                asset_root_path=asset_root_path,
-                asset_id=job.asset_id,
-            )
-            print("[USECASE] prepare_dirs 끝")
-
             stage = "mark_running"
             print("[USECASE] job mark_running 시작")
             job.mark_running()
@@ -131,27 +122,13 @@ class RunMLProcessUseCase:
 
             stage = "demucs"
             print("[USECASE] demucs 시작")
-            print(f"[USECASE] input_wav_path={input_wav_path}")
-            print(f"[USECASE] asset_root_path={asset_root_path}")
+            print(f"[USECASE] output_dir={ base_url}")
             print(f"[USECASE] job.asset_id={job.asset_id}")
 
-            expected_same_path: Path = asset_root_path / "audio" / "original.wav"
-            expected_asset_path: Path = asset_dir / "audio" / "original.wav"
-
-            print(f"[USECASE] expected_same_path={expected_same_path}")
-            print(f"[USECASE] expected_asset_path={expected_asset_path}")
-            print(
-                "[USECASE] input == expected_same_path ? "
-                f"{input_wav_path.resolve() == expected_same_path.resolve()}"
-            )
-            print(
-                "[USECASE] input == expected_asset_path ? "
-                f"{input_wav_path.resolve() == expected_asset_path.resolve()}"
-            )
-
             bass_only_wav_path: Path = await self.demucs_port.split(
-                input_wav_path=input_wav_path,
-                output_dir=asset_root_path,
+                input_wav_path=job.input_wav_path,
+                output_dir=base_url,
+                temp_dir=storage_root,
                 asset_id=job.asset_id,
                 setting=DemucsSplitSetting(
                     boosted_volume_db=10.0,
@@ -175,14 +152,14 @@ class RunMLProcessUseCase:
             await self.job_store.save(job)
             print("[USECASE] progress 15 저장 끝")
 
-            original_wav_path: Path = input_wav_path
+            original_wav_path: str = base_url
 
             stage = "basic_pitch_onset"
             print("[USECASE] basic_pitch onset 시작")
             basic_pitch_onset_result: list[BasicPitchNoteEventDTO] = await self.basic_pitch_port.export_onset(
                 params=BasicPitchParams(
                     input_wav_path=bass_only_wav_path,
-                    output_dir=asset_root_path,
+                    output_dir=base_url,
                     asset_id=job.asset_id,
                 )
             )
@@ -194,7 +171,7 @@ class RunMLProcessUseCase:
             basic_pitch_frame_result: list[BasicPitchFramePitchDTO] = await self.basic_pitch_port.export_frame(
                 params=BasicPitchParams(
                     input_wav_path=bass_only_wav_path,
-                    output_dir=asset_root_path,
+                    output_dir=base_url,
                     asset_id=job.asset_id,
                 )
             )
@@ -247,12 +224,13 @@ class RunMLProcessUseCase:
             stage = "bpm"
             print("[USECASE] bpm 시작")
             bpm: int = await self.bpm_port.estimate_bpm(
-                input_wav_path=original_wav_path,
+                input_wav_path=bass_only_wav_path,
                 note=onset_normalized_notes,
                 start_seconds=0.0,
                 duration_seconds=None,
                 sr=22050,
             )
+            
             print("[USECASE] bpm 끝")
             print(f"[USECASE] bpm={bpm}")
 
@@ -304,32 +282,32 @@ class RunMLProcessUseCase:
 
             stage = "generate_original_tab"
             print("[USECASE] original tab 생성 시작")
-            original_tab_path: Path = self.original_tab_generate_port.tab_generate(
+            original_tab_success: bool = await self.original_tab_generate_port.tab_generate(
                 original_json=viterbi_steps,
                 bpm=int(bpm),
-                output_dir=asset_root_path,
+                output_dir=str(job.output_dir),
                 asset_id=job.asset_id,
             )
-            print("[USECASE] original tab 생성 끝")
-            print(f"[USECASE] original_tab_path={original_tab_path}")
+            print(f"[USECASE] original tab 완료 여부: {original_tab_success}")
 
             stage = "generate_root_tab"
             print("[USECASE] root tab 생성 시작")
-            root_tab_path: Path = self.root_tab_generate_adapter.tab_generate(
+            root_tab_success: Path = await self.root_tab_generate_adapter.tab_generate(
                 original_json=root_notes,
                 bpm=int(bpm),
-                output_dir=asset_root_path,
+                output_dir=str(job.output_dir),
                 asset_id=job.asset_id,
             )
             print("[USECASE] root tab 생성 끝")
-            print(f"[USECASE] root_tab_path={root_tab_path}")
+            print(f"[USECASE] root_tab_path={root_tab_success}")
 
             stage = "mark_done"
             print("[USECASE] job mark_done 시작")
             job.mark_done()
             await self.job_store.save(job)
+            
             print("[USECASE] job mark_done 끝")
-
+            final_asset_path = f"{str(job.output_dir).rstrip('/')}/asset/{job.asset_id}"
             print("[USECASE] 전체 완료")
             return MLProcessResponseDTO(
                 job_id=job.job_id,
@@ -337,12 +315,11 @@ class RunMLProcessUseCase:
                 result_id=job.result_id,
                 asset_id=job.asset_id,
                 status=job.status.value,
-                path=str(asset_dir),
+                path=str(final_asset_path),
                 error=None,
                 norm_title=request.norm_title,
                 norm_artist=request.norm_artist,
             )
-
         except Exception as e:
             print(f"[USECASE] 예외 발생 stage={stage}")
             print(f"[USECASE] 예외 타입={type(e).__name__}")
@@ -359,6 +336,8 @@ class RunMLProcessUseCase:
             except Exception as save_e:
                 print(f"[USECASE] mark_failed 저장 중 추가 예외={save_e}")
 
+            asset_dir = asset_dir = f"{str(job.output_dir).rstrip('/')}/asset/{job.asset_id}"
+            
             return MLProcessResponseDTO(
                 job_id=job.job_id,
                 song_id=job.song_id,
@@ -380,22 +359,8 @@ class RunMLProcessUseCase:
     def _generate_asset_id(self) -> str:
         return uuid.uuid4().hex
 
-    def _build_asset_dir(self, *, asset_root_path: Path, asset_id: str) -> Path:
-        return asset_root_path / "assets" / asset_id
 
-    def _prepare_dirs(self, *, asset_root_path: Path, asset_id: str) -> Path:
-        asset_dir: Path = self._build_asset_dir(
-            asset_root_path=asset_root_path,
-            asset_id=asset_id,
-        )
-        asset_dir.mkdir(parents=True, exist_ok=True)
-        (asset_dir / "audio").mkdir(parents=True, exist_ok=True)
-        (asset_dir / "note").mkdir(parents=True, exist_ok=True)
-        (asset_dir / "tab").mkdir(parents=True, exist_ok=True)
-        (asset_dir / "meta").mkdir(parents=True, exist_ok=True)
-        (asset_dir / "stem").mkdir(parents=True, exist_ok=True)
-        return asset_dir
-
+    
     def _save_note_events(
         self,
         *,

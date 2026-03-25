@@ -15,9 +15,16 @@ from app.application.ports.tab.tab.original_tab.original_tab_port import (
     BassTabBarNoteDTO,
 )
 
+from app.adapters.ml_supabase_adapter import SupabaseAudioHandler
+
+def _log_step(message: str) -> None:
+    print(f"[root_tab] {message}")
+
+
 @dataclass(frozen=True)
 class RootTabGenerateAdapter:
     candidate_builder: BassTabCandidateBuilderPort
+    handler: SupabaseAudioHandler
     output_filename: str = "root_tab.json"
 
     beats_per_bar: int = 4
@@ -25,43 +32,75 @@ class RootTabGenerateAdapter:
         default_factory=BassTabCandidateBuildParams
     )
 
-    def tab_generate(
+    async def tab_generate(
         self,
         *,
         original_json: list[BasicPitchNoteEventDTO],
         bpm: int,
-        output_dir: Path,
+        output_dir: str,  # 스토리지 베이스 URL
         asset_id: str,
-    ) -> Path:
+    ) -> bool:
+        """
+        노트 데이터를 분석하여 베이스 루트 타브를 생성하고 Supabase에 직접 업로드합니다.
+        로컬 파일을 생성하지 않습니다.
+        """
         if bpm <= 0:
             raise ValueError("bpm must be > 0")
         if self.beats_per_bar <= 0:
             raise ValueError("beats_per_bar must be > 0")
 
+        # 1. 노트 필터링 및 정렬
         filtered_notes: list[BasicPitchNoteEventDTO] = self._filter_notes(notes=original_json)
 
-        output_path: Path = self._build_output_path(
-            output_dir=output_dir,
-            asset_id=asset_id,
+        bars: list[BassTabBarDTO] = []
+        if filtered_notes:
+            sorted_notes: list[BasicPitchNoteEventDTO] = sorted(
+                filtered_notes,
+                key=lambda x: (float(x.start_time), float(x.end_time), int(x.pitch_midi)),
+            )
+
+            # 2. 마디별 루트 피치 추출 및 타브 생성
+            bars = self._build_root_bars(
+                notes=sorted_notes,
+                bpm=bpm,
+                beats_per_bar=self.beats_per_bar,
+            )
+
+        # 3. JSON 페이로드 생성
+        payload = self._create_json_payload(bars=bars)
+
+        # 4. 업로드 경로 및 URL 구성
+        target_upload_url = f"{output_dir.rstrip('/')}/asset/{asset_id}/tab/{self.output_filename}"
+
+        _log_step(f"📤 결과 업로드 중... ({target_upload_url})")
+
+        # 5. 핸들러를 통한 메모리 직접 업로드
+        success = await self.handler.upload_json_to_supabase(
+            payload=payload,
+            target_supabase_url=target_upload_url
         )
+        
+        return success
 
-        if not filtered_notes:
-            self._write_json(output_path=output_path, bars=[])
-            return output_path
-
-        sorted_notes: list[BasicPitchNoteEventDTO] = sorted(
-            filtered_notes,
-            key=lambda x: (float(x.start_time), float(x.end_time), int(x.pitch_midi)),
-        )
-
-        bars: list[BassTabBarDTO] = self._build_root_bars(
-            notes=sorted_notes,
-            bpm=bpm,
-            beats_per_bar=self.beats_per_bar,
-        )
-
-        self._write_json(output_path=output_path, bars=bars)
-        return output_path
+    def _create_json_payload(self, bars: list[BassTabBarDTO]) -> list[dict]:
+        """DTO 데이터를 JSON 직렬화가 가능한 딕셔너리 리스트로 변환합니다."""
+        payload: list[dict] = []
+        for bar in bars:
+            payload.append({
+                "bar_index": int(bar.bar_index),
+                "start_time": float(bar.start_time),
+                "end_time": float(bar.end_time),
+                "notes": [
+                    {
+                        "time": float(note.time),
+                        "offset": float(note.offset),
+                        "line": int(note.line),
+                        "fret": int(note.fret),
+                    }
+                    for note in bar.notes
+                ],
+            })
+        return payload
 
     def _filter_notes(
         self,
@@ -152,10 +191,6 @@ class RootTabGenerateAdapter:
         bar_start_time: float,
         bar_end_time: float,
     ) -> int | None:
-        """
-        한 bar 안에서 가장 오래/많이 유지된 pitch를 대표 root로 선택.
-        동률이면 더 낮은 pitch 우선.
-        """
         pitch_scores: dict[int, float] = {}
 
         for note in notes:
@@ -213,9 +248,7 @@ class RootTabGenerateAdapter:
 
         candidates: list[BassTabCandidateDTO] = list(built[0])
 
-        # root tab은 최대한 단순하게:
-        # 1) 낮은 fret 우선
-        # 2) 동률이면 더 낮은 줄(4 -> 1) 우선
+        # 낮은 fret 우선, 동률이면 낮은 줄(4번줄 쪽) 우선
         candidates.sort(
             key=lambda c: (
                 int(c.fret),
@@ -235,44 +268,3 @@ class RootTabGenerateAdapter:
         lo: float = a0 if a0 >= b0 else b0
         hi: float = a1 if a1 <= b1 else b1
         return 0.0 if hi <= lo else float(hi - lo)
-
-    def _build_output_path(
-        self,
-        *,
-        output_dir: Path,
-        asset_id: str,
-    ) -> Path:
-        asset_dir: Path = Path(output_dir) / "assets" / str(asset_id)
-        tab_dir: Path = asset_dir / "tab"
-        tab_dir.mkdir(parents=True, exist_ok=True)
-        return tab_dir / self.output_filename
-
-    def _write_json(
-        self,
-        *,
-        output_path: Path,
-        bars: list[BassTabBarDTO],
-    ) -> None:
-        payload: list[dict[str, object]] = []
-        for bar in bars:
-            payload.append(
-                {
-                    "bar_index": int(bar.bar_index),
-                    "start_time": float(bar.start_time),
-                    "end_time": float(bar.end_time),
-                    "notes": [
-                        {
-                            "time": float(note.time),
-                            "offset": float(note.offset),
-                            "line": int(note.line),
-                            "fret": int(note.fret),
-                        }
-                        for note in bar.notes
-                    ],
-                }
-            )
-
-        output_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )

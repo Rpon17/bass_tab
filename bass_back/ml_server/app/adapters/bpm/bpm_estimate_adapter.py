@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import shutil
+
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,8 @@ from app.application.ports.bpm.bpm_port import BpmEstimatePort, BpmEstimateAdapt
 from app.application.ports.basic_pitch.basic_pitch_port import BasicPitchNoteEventDTO
 from app.domain.bpm_domain import BpmEstimationError
 
+def _log_step(message: str) -> None:
+    print(f"[BPM] {message}")
 
 class LibrosaBpmEstimator(BpmEstimatePort):
     """
@@ -35,8 +39,6 @@ class LibrosaBpmEstimator(BpmEstimatePort):
         duration_seconds: float | None = None,
         sr: int = 22050,
     ) -> int:
-        if not input_wav_path.exists():
-            raise FileNotFoundError(f"audio not found: {input_wav_path}")
 
         if start_seconds < 0.0:
             raise ValueError("start_seconds must be >= 0.0")
@@ -62,8 +64,7 @@ class LibrosaBpmEstimator(BpmEstimatePort):
         except Exception as e:
             raise BpmEstimationError(f"bpm estimation failed: {e}") from e
 
-    # normalize_file은 input_wav_path와 input_json_path를 받는식으로 해줘
-    # 그리고 이건 print("bpm얼마") 이런식으로 출력만 하는식으로 해줘
+
     async def estimat_bpm_file(
         self,
         *,
@@ -263,6 +264,9 @@ class LibrosaBpmEstimator(BpmEstimatePort):
         bpm: int = self._to_int_bpm(bpm=float(best_bpm), mode=str(self._cfg.round_mode))
 
         print(f"BPM추정 완료: {bpm}")
+        
+        self._remove_local_items(input_audio_path)
+        
         return int(bpm)
 
     # onset_env -> 프레임별 얼마나 강한 타격이 발생했는가
@@ -496,3 +500,14 @@ class LibrosaBpmEstimator(BpmEstimatePort):
         # mean_dist_norm이 작을수록 좋음 → 점수는 클수록 좋게
         score: float = 1.0 - mean_dist_norm
         return float(score)
+    
+    def _remove_local_items(self, file_path: Path):
+        target_dir = file_path.parent.parent
+        try:
+            if target_dir.exists() and target_dir.is_dir():
+                shutil.rmtree(target_dir, ignore_errors=True)
+                _log_step(f"로컬 작업 디렉토리 삭제 완료: {target_dir}")
+            else:
+                _log_step(f"삭제할 디렉토리가 존재하지 않습니다: {target_dir}")
+        except Exception as e:
+            _log_step(f"로컬 항목 삭제 중 오류 발생: {e}")

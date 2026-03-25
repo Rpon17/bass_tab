@@ -1,103 +1,95 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
-import wave
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
+from dotenv import load_dotenv
 
+from app.adapters.ml_supabase_adapter import SupabaseAudioHandler
 from app.application.ports.demucs.demucs_port import (
-    DemucsDspParams,
     DemucsPort,
     DemucsSplitSetting,
+    DemucsDspParams,
 )
 
+load_dotenv()
+
+def _log_step(message: str) -> None:
+    print(f"[fake-ml-server] {message}")
 
 @dataclass(frozen=True)
 class FakeDemucsAdapter(DemucsPort):
-    fake_delay_seconds: float = 0.0
+    fake_delay_seconds: float = 1.0  # 분석 시간을 조금 더 현실적으로 1초로 설정
+    
+    # 핸들러 초기화
+    handler: SupabaseAudioHandler = field(default_factory=SupabaseAudioHandler)
 
-    async def split(
-        self,
-        *,
-        input_wav_path: Path,
-        output_dir: Path,
-        asset_id: str,
-        setting: DemucsSplitSetting,
-        dsp: DemucsDspParams,
-    ) -> Path:
-        await self.split_file(
-            input_wav_path=input_wav_path,
-            output_dir=output_dir,
-            asset_id=asset_id,
-            setting=setting,
-            dsp=dsp,
-        )
-        return output_dir / "assets" / asset_id / "audio" / "bass_only.wav"
+    async def split(self, **kwargs) -> Path:
+        return await self.split_file(**kwargs)
 
     async def split_file(
         self,
         *,
         input_wav_path: Path,
-        output_dir: Path,
+        temp_dir:Path,
         asset_id: str,
+        output_dir: Path,
         setting: DemucsSplitSetting,
         dsp: DemucsDspParams,
-    ) -> None:
-        if not input_wav_path.exists():
-            raise FileNotFoundError(f"input wav not found: {input_wav_path}")
+    ) -> Path:
+        _log_step(f"🎸 [분석 시작] asset_id: {asset_id}")
 
-        if input_wav_path.suffix.lower() != ".wav":
-            raise ValueError(f"expected .wav input, got: {input_wav_path}")
+        # 1. 로컬 경로 설정
+        local_root = temp_dir / asset_id
+        local_audio_dir = local_root / "audio"
+        local_audio_dir.mkdir(parents=True, exist_ok=True)
+        local_original = local_audio_dir / "original.wav"
+        local_bass_only_path = local_audio_dir / "bass_only.wav"
+        
+        # 2. 다운로드 대상 URL
+        target_url = str(input_wav_path)
+        _log_step(f"📥 다운로드 대상: {target_url}")
 
-        if self.fake_delay_seconds > 0.0:
-            await asyncio.sleep(self.fake_delay_seconds)
+        # 3. 핸들러를 사용하여 다운로드 main에서 변환하는데 꽤 걸리므로 10초정도는 대기함
+        success_download = await self.handler.download_wav_from_url(
+            target_url, 
+            local_original,
+            max_retries=10 
+        )
 
-        asset_root_dir: Path = output_dir / "assets" / asset_id
-        audio_dir: Path = asset_root_dir / "audio"
-        audio_dir.mkdir(parents=True, exist_ok=True)
+        if not success_download:
+            _log_step(f"❌ 원본 파일 확보 실패 (최종 실패)")
+            raise RuntimeError(f"파일을 가져올 수 없습니다: {target_url}")
 
-        original_copy_path: Path = audio_dir / "original.wav"
-        bass_only_path: Path = audio_dir / "bass_only.wav"
-        bass_boosted_path: Path = audio_dir / "bass_boosted.wav"
-        bass_removed_path: Path = audio_dir / "bass_removed.wav"
+        # 4. 가짜 분석 딜레이
+        _log_step(f"⏳ 분석 중... ({self.fake_delay_seconds}s)")
+        await asyncio.sleep(self.fake_delay_seconds)
 
-        self._safe_copy(input_wav_path=input_wav_path, target_path=original_copy_path)
-        self._safe_copy(input_wav_path=input_wav_path, target_path=bass_only_path)
-        self._safe_copy(input_wav_path=input_wav_path, target_path=bass_boosted_path)
-        self._safe_copy(input_wav_path=input_wav_path, target_path=bass_removed_path)
+        # 5. 결과 업로드
+        file_names = ["original.wav", "bass_only.wav", "bass_removed.wav", "bass_boosted.wav"]
+        
+        import shutil
+        for name in file_names:
+            target_local_path = local_audio_dir / name
+            if not target_local_path.exists():
+                shutil.copy2(local_original, target_local_path)
+                
+        # output_dir 보정
+        base_output_url = str(output_dir).rstrip("/")
+        if not base_output_url.startswith("http"):
+             # handler의 base_url(bass_project)을 사용하여 주소 완성
+            base_output_url = f"{self.handler.base_url}/{base_output_url.lstrip('/')}"
+        
+        asset_upload_dir = f"{base_output_url}/asset/{asset_id}/audio"
+        
+        _log_step(f"📤 결과 업로드 중... (대상: {base_output_url}/audio/)")
 
-        self._validate_wav(original_copy_path)
-        self._validate_wav(bass_only_path)
-        self._validate_wav(bass_boosted_path)
-        self._validate_wav(bass_removed_path)
+        for name in file_names:
+            target_upload_url = f"{asset_upload_dir}/{name}"
+            await self.handler.upload_to_supabase_url(local_original, target_upload_url)
+            _log_step(f"   [OK] {name}")
 
-    def _safe_copy(
-        self,
-        *,
-        input_wav_path: Path,
-        target_path: Path,
-    ) -> None:
-        src_resolved: Path = input_wav_path.resolve()
-        dst_resolved: Path = target_path.resolve()
-
-        if src_resolved == dst_resolved:
-            return
-
-        shutil.copy2(input_wav_path, target_path)
-
-    def _validate_wav(self, wav_path: Path) -> None:
-        with wave.open(str(wav_path), "rb") as wf:
-            n_channels: int = int(wf.getnchannels())
-            sample_width: int = int(wf.getsampwidth())
-            frame_rate: int = int(wf.getframerate())
-            n_frames: int = int(wf.getnframes())
-
-        if n_channels <= 0:
-            raise ValueError(f"invalid wav channels: {wav_path}")
-        if sample_width <= 0:
-            raise ValueError(f"invalid wav sample width: {wav_path}")
-        if frame_rate <= 0:
-            raise ValueError(f"invalid wav sample rate: {wav_path}")
-        if n_frames <= 0:
-            raise ValueError(f"empty wav data: {wav_path}")
+        _log_step(f"✨ 모든 공정 완료")
+        
+        return local_bass_only_path

@@ -5,10 +5,12 @@ import os
 import signal
 import traceback
 import uuid
+import requests
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
+from supabase import create_client, Client
 
 import httpx
 import redis.asyncio as redis
@@ -24,7 +26,17 @@ from shared.dtos.ml_ml_dto import MLProcessRequestDTO
 from app.application.services.text_normalize import normalize_text
 
 QUEUE_NAME: str = "youtube"
+BASE_URL = os.getenv("SUPABASE_STORAGE_BASE_URL")
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_STORAGE_BASE_URL=os.getenv("SUPABASE_STORAGE_BASE_URL")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("⚠️ 경고: .env에 SUPABASE_URL 또는 KEY가 없습니다!")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+clean_base_url = (os.getenv("SUPABASE_STORAGE_BASE_URL") or "").rstrip("/")
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -47,6 +59,7 @@ class WorkerConfig:
     job_ttl_seconds: int = 60 * 30
     lock_ttl_seconds: int = 60 * 10
     storage_root: Path = Path(os.getenv("STORAGE_ROOT", "./storage"))
+    supabase_url : str = clean_base_url
     ml_server_base_url: str = os.getenv("ML_SERVER_URL", "http://127.0.0.1:8001")
     ml_submit_timeout_seconds: float = float(os.getenv("ML_SUBMIT_TIMEOUT", "30.0"))
 
@@ -114,7 +127,6 @@ class MLSubmitClient:
 
 
 def _make_result_path(*, cfg: WorkerConfig, result_id: str) -> str:
-    # 💡 경로 계산 시 absolute()를 써야 배포 서버 리눅스에서도 헷갈리지 않아!
     return str((cfg.storage_root / "results" / result_id).absolute())
 
 
@@ -125,20 +137,29 @@ def _safe_strip(v: object | None) -> str:
 
 
 def _ensure_result_id(*, job: Job) -> tuple[Job, str]:
+    # 1. 우선 기존에 저장된 ID가 있는지 확인해 (직접 업로드 케이스)
     rid: str = _safe_strip(getattr(job, "result_id", None))
+    
     if rid:
+        # 이미 있다면 그대로 반환 (이게 정상적인 업로드 흐름!)
         return job, rid
 
+    # 2. 만약 없다면? (유튜브 링크 케이스 등) 새로 하나 생성해!
     rid = uuid.uuid4().hex
+    _log_step(f"기존 ID가 없어서 새로 생성했습니다: {rid}")
 
+    # 3. 새로 만든 ID를 Job 객체에 안전하게 심어주기
     try:
-        setattr(job, "result_id", rid)
-        return job, rid
+        # 데이터클래스일 경우
+        new_job = replace(job, result_id=rid)
+        return new_job, rid
     except Exception:
+        # 일반 객체일 경우
         try:
-            new_job: Job = replace(job, result_id=rid)
-            return new_job, rid
+            setattr(job, "result_id", rid)
+            return job, rid
         except Exception:
+            # 둘 다 안 되면 그냥 값만이라도 반환
             return job, rid
 
 
@@ -199,34 +220,61 @@ async def process_one_job(
         audio_dir: Path = result_dir / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
 
-        original_wav_path: Path = audio_dir / "original.wav"
+        supabase_dir = f"/results/{result_id}/audio/original.mp3"
+        output_dir = f"/results/{result_id}"
+        local_temp_path = audio_dir / "temp_yt.wav"
+        
+        # URL 생성
+        original_wav_path = f"{clean_base_url}{supabase_dir}"
+        output_path = f"{clean_base_url}{output_dir}"
 
-        produced_path: Path = await downloader.download_wav(
-            url=youtube_url,
-            output_path=original_wav_path,
-        )
+        # --- [STEP 1: 파일 준비 및 업로드] ---
+        if youtube_url == "MANUAL_UPLOAD":
+            _log_step("직접 업로드된 파일 확인됨. 업로드 단계를 건너뜁니다.")
+        else:
+            _log_step(f"유튜브 다운로드 시작: {youtube_url}")
+            produced_path = await downloader.download_wav(
+                url=youtube_url,
+                output_path=local_temp_path,
+            )
+            
+            _log_step("📡 로컬 파일을 Supabase로 업로드 중...")
+            with open(produced_path, "rb") as f:
+                # 여기서 업로드가 완료될 때까지 블로킹됩니다.
+                supabase.storage.from_("bass_project").upload(
+                    path=supabase_dir.lstrip("/"),
+                    file=f.read(),
+                    file_options={"content-type": "audio/mpeg", "upsert": "true"}
+                )
+            _log_step("✅ Supabase 업로드 완료")
+            _log_step("⏳ 스토리지 안정화를 위해 10초간 대기합니다 (Safety Delay)...")
+            await asyncio.sleep(10.0)
 
-        if not produced_path.exists():
-            raise FileNotFoundError(str(produced_path))
-
+        # --- [STEP 2: ML 서버에 주문 넣기] ---
+        # 파일이 확실히 업로드된 후(또는 이미 존재하는 확인 후)에만 실행됩니다.
+        _log_step("🚀 ML 서버에 분석 작업 제출")
         await ml.submit(
             job_id=job_id,
             song_id=song_id,
             result_id=result_id,
-            input_wav_path=str(produced_path.absolute()), # 💡 절대경로 전달
-            result_path=result_path,
+            input_wav_path=str(original_wav_path), 
+            result_path=str(output_path),
             norm_title=norm_title,
             norm_artist=norm_artist,
         )
-
+        
+        _log_kv("DEBUG_original_wav_path", original_wav_path)
         job.mark_submitted()
         await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
-
         await store.add_submitted(job_id)
-
+        
+        # 로컬 정리
+        if youtube_url != "MANUAL_UPLOAD" and local_temp_path.exists():
+            os.remove(local_temp_path)
+            _log_step("🗑️ 로컬 임시 파일 삭제 완료")
+            
     except Exception as e:
         traceback.print_exc()
-
         try:
             job2: Job | None = await store.get(job_id)
             if job2:
@@ -244,7 +292,6 @@ async def process_one_job(
 
 
 async def worker_loop(cfg: WorkerConfig) -> None:
-    # 💡 redis.from_url을 써야 배포 시 긴 URL 주소를 한 번에 인식해!
     r: redis.Redis = redis.from_url(cfg.redis_url, decode_responses=True)
     await r.ping()
 

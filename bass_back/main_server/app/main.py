@@ -10,6 +10,7 @@ load_dotenv()
 
 from app.api.v1.routers.create_router import router as create_router
 from app.api.v1.routers.front_back_router import router as song_search_router
+from app.api.v1.routers.create_router_upload import router as upload__router
 
 def create_app() -> FastAPI:
     # 1. redirect_slashes=False: /v1/jobs/ 와 /v1/jobs 를 똑같이 처리해줌
@@ -40,6 +41,8 @@ def create_app() -> FastAPI:
     # song_search_router 안에 있는 경로들이 /v1/songs/... 로 등록됨
     app.include_router(song_search_router, prefix="/v1/songs")
 
+    app.include_router(upload__router,prefix="/v1/upload")
+    
     # 5. 정적 파일 스토리지 설정
     storage_path = os.getenv("STORAGE_ROOT", "/opt/render/project/src/storage")
     if not os.path.exists(storage_path):

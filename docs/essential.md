@@ -8,8 +8,6 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 deactivate
 cd C:\BASS_PROJECT\bass_back\main_server
 .\.venv\Scripts\activate
-$env:STORAGE_ROOT = "C:\bass_project\storage"
-$env:YTDLP_COOKIEFILE="C:\bass_project\bass_back\cookie\cookies.txt"
 python -m app.worker.submit_worker
 
 3
@@ -30,8 +28,28 @@ cd C:\BASS_PROJECT\bass_back\ml_server
 .\.venv\Scripts\activate
 python -m app.worker.test_worker
 
+
+deactivate
+cd C:\BASS_PROJECT\bass_back\ml_server
+.\.venv\Scripts\activate
+python -m app.worker.ml_worker
+
+
+
 인덱스 새로만들기
 python C:\bass_project\bass_back\main_server\scripts\init_db.py
+
+레디스 지우기
+FLUSHDB
+
+
+from supabase import create_client, Client
+load_dotenv()
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
+
+
 
 경로이동
 cd C:\BASS_PROJECT\bass_back\main_server

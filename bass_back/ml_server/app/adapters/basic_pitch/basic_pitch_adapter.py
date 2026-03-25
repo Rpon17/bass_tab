@@ -17,7 +17,6 @@ from app.application.ports.basic_pitch.basic_pitch_port import (
     BasicPitchResult,
 )
 
-
 @dataclass(frozen=True)
 class BasicPitchAdapter(BasicPitchPort):
     async def export_onset(
@@ -84,7 +83,8 @@ class BasicPitchAdapter(BasicPitchPort):
             midi_offset=float(consts["midi_offset"]),
             bins_per_semitone=float(consts["bins_per_semitone"]),
         )
-        print("basic_pitch로  리스트 추출완료")
+        print("basic_pitch로 프레임 리스트 추출완료")
+        
         return frame_pitches
 
     async def export_file(
