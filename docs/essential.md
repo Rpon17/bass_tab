@@ -120,8 +120,8 @@ python main_server/app/worker/youtube_worker.py
 깃허브 
 
 git add .
-git commit -m "다 끝나고 배포만하믄댐"
-git push -u origin master
+git commit -m "로컬 테스트 완료 배포 워커로그"
+git push origin main
 
 선언한 이름들
 prefix -> job으로
