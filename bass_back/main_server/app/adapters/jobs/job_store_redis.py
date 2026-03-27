@@ -1,7 +1,7 @@
 # main_server/app/adapters/jobs/job_store_redis.py
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from redis.asyncio import Redis
@@ -43,7 +43,8 @@ class RedisJobStore(JobStore):
     @staticmethod
     def _str_to_dt(s: str) -> datetime:
         if not s:
-            return datetime.utcnow()
+            # [수정] datetime.utcnow() deprecated → timezone-aware datetime 사용
+            return datetime.now(timezone.utc)
         return datetime.fromisoformat(s)
 
     @staticmethod

@@ -8,36 +8,28 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import httpx
 import redis.asyncio as redis
 from dotenv import load_dotenv
 
-# .env 파일 로드 (배포 환경 필수!)
+# .env 로드
 load_dotenv()
 
 from app.adapters.jobs.job_store_redis import RedisJobStore
 from app.domain.jobs_domain import JobStatus
 from app.application.usecases.songs.asset_create_usecase import CreateAssetUseCase
-from shared.dtos.ml_ml_dto import MLProcessResponseDTO
-
 
 def _log(message: str) -> None:
-    print(f"[communicate-worker] {message}")
-
+    print(f"[watchdog-worker] {message}")
 
 @dataclass(frozen=True)
 class CommunicaterConfig:
     redis_url: str
     key_prefix: str = "bass:"
     submitted_sample_n: int = 20
-    poll_interval_seconds: float = 2.0
-    submitted_timeout_minutes: int = 30
-    job_ttl_seconds: int = 60 * 30
-    # 💡 로컬 주소 대신 환경 변수에서 가져오도록 수정
-    ml_server_base_url: str = os.getenv("ML_SERVER_URL", "http://localhost:8001")
-    http_timeout_seconds: float = 10.0
+    poll_interval_seconds: float = 5.0  # 감시 주기는 조금 여유 있게 (5초)
+    submitted_timeout_minutes: int = 15 # 15분 이상 응답 없으면 실패 처리
+    job_ttl_seconds: int = 60 * 60     # 결과 유지 시간 (1시간)
     max_concurrent_status_checks: int = 10
-
 
 class GracefulShutdown:
     def __init__(self) -> None:
@@ -55,206 +47,103 @@ class GracefulShutdown:
     def stop_event(self) -> asyncio.Event:
         return self._stop
 
-
-class MLStatusClient:
-    def __init__(self, base_url: str, *, timeout_seconds: float = 10.0) -> None:
-        self._base_url: str = base_url.rstrip("/")
-        self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=timeout_seconds)
-
-    async def aclose(self) -> None:
-        await self._client.aclose()
-
-    async def get_status(self, job_id: str) -> MLProcessResponseDTO:
-        url: str = f"{self._base_url}/v1/status/{job_id}"
-        response: httpx.Response = await self._client.get(url)
-        response.raise_for_status()
-        return MLProcessResponseDTO.model_validate(response.json())
-
-
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-
 def _to_datetime_utc(value: Any) -> datetime:
     if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
     if isinstance(value, str):
-        s: str = value.strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-
         try:
-            dt: datetime = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                return dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
-        except Exception:
-            return _utcnow()
-
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+        except: return _utcnow()
     return _utcnow()
 
+def _is_submitted_timeout(updated_at: Any, timeout_minutes: int) -> bool:
+    if timeout_minutes <= 0: return False
+    updated_at_dt = _to_datetime_utc(updated_at)
+    return _utcnow() >= (updated_at_dt + timedelta(minutes=timeout_minutes))
 
-def _is_submitted_timeout(
-    *,
-    updated_at: Any,
-    timeout_minutes: int,
-) -> bool:
-    if timeout_minutes <= 0:
-        return False
-
-    updated_at_dt: datetime = _to_datetime_utc(updated_at)
-    deadline: datetime = updated_at_dt + timedelta(minutes=timeout_minutes)
-    return _utcnow() >= deadline
-
-
-async def _communicater_one(
+async def _watchdog_one(
     *,
     job_id: str,
     store: RedisJobStore,
-    ml: MLStatusClient,
     cfg: CommunicaterConfig,
     sem: asyncio.Semaphore,
-    create_asset_uc: CreateAssetUseCase,
 ) -> None:
+    """
+    HTTP 호출 없이 Redis에 저장된 Job 상태만 확인합니다.
+    """
     async with sem:
         job = await store.get(job_id=job_id)
+        
+        # 1. Redis에 Job 데이터 자체가 없는 경우
         if not job:
-            _log(f"job not found in redis: {job_id}")
+            _log(f"Job data missing in Redis, removing from queue: {job_id}")
             await store.remove_submitted(job_id)
             return
 
+        # 2. 이미 성공(DONE)했거나 실패(FAILED)한 경우
         if job.status in (JobStatus.DONE, JobStatus.FAILED):
+            _log(f"Job {job_id} is already {job.status}. Clearing from submitted list.")
             await store.remove_submitted(job_id)
             return
 
-        try:
-            data: MLProcessResponseDTO = await ml.get_status(job_id)
-            _log(f"ML status response: job_id={job_id} status={data.status}")
-        except Exception as e:
-            _log(f"ML status request failed: {job_id} error={repr(e)}")
-            
-            if _is_submitted_timeout(
-                updated_at=job.updated_at,
-                timeout_minutes=cfg.submitted_timeout_minutes,
-            ):
-                job.mark_failed(error=f"ML status polling timeout: {e}")
-                await store.save(job=job, ttl_seconds=cfg.job_ttl_seconds)
-                await store.remove_submitted(job_id)
-            return
-
-        status: str = data.status.lower().strip()
-
-        if status == "done":
-            result_path: str = data.path
-            asset_id: str = data.asset_id
-            result_id: str | None = job.result_id
-
-            if result_path and asset_id and result_id:
-                try:
-                    _log(f"Saving asset for job_id={job_id}")
-                    await create_asset_uc.execute(
-                        result_id=result_id,
-                        asset_id=asset_id,
-                        path=result_path,
-                    )
-                    job.asset_id = asset_id
-                    job.mark_done(path=result_path)
-                    _log(f"job done: {job_id}")
-                except Exception as e:
-                    _log(f"asset save failed: {repr(e)}")
-                    job.mark_failed(error=f"Asset save failed: {e}")
-            else:
-                job.mark_failed(error="ML returned done but missing data")
-
+        # 3. 아직 진행 중인데 너무 오래 걸리는 경우 (타임아웃 처리)
+        if _is_submitted_timeout(job.updated_at, cfg.submitted_timeout_minutes):
+            _log(f"⚠️ Job Timeout Detect: {job_id} (No response for {cfg.submitted_timeout_minutes}m)")
+            job.mark_failed(error=f"Processing timeout after {cfg.submitted_timeout_minutes} minutes.")
             await store.save(job=job, ttl_seconds=cfg.job_ttl_seconds)
             await store.remove_submitted(job_id)
             return
+        
+        # 아직 정상 범위 내에서 분석 중인 경우 아무것도 하지 않음 (Pass)
 
-        if status == "failed":
-            err: str = data.error or "ML processing failed"
-            job.mark_failed(error=err)
-            await store.save(job=job, ttl_seconds=cfg.job_ttl_seconds)
-            await store.remove_submitted(job_id)
-            return
-
-
-async def communicater_loop(
+async def watchdog_loop(
     cfg: CommunicaterConfig,
-    create_asset_uc: CreateAssetUseCase,
 ) -> None:
-    _log("starting communicate worker")
+    _log("🚀 Watchdog worker started (Monitoring Redis status)")
 
-    # 💡 redis.from_url에 decode_responses=True 추가 (데이터 읽기 편하게)
     r: redis.Redis = redis.from_url(cfg.redis_url, decode_responses=True)
     await r.ping()
-    _log(f"redis connected: {cfg.redis_url}")
-
     store: RedisJobStore = RedisJobStore(r, key_prefix=cfg.key_prefix)
-    ml: MLStatusClient = MLStatusClient(
-        cfg.ml_server_base_url,
-        timeout_seconds=cfg.http_timeout_seconds,
-    )
 
-    shutdown: GracefulShutdown = GracefulShutdown()
+    shutdown = GracefulShutdown()
     shutdown.install()
-
-    sem: asyncio.Semaphore = asyncio.Semaphore(cfg.max_concurrent_status_checks)
+    sem = asyncio.Semaphore(cfg.max_concurrent_status_checks)
 
     try:
         while not shutdown.stop_event.is_set():
-            job_ids: list[str] = await store.sample_submitted(cfg.submitted_sample_n)
+            # 제출된(Submitted) 리스트에서 작업 ID 샘플링
+            job_ids = await store.sample_submitted(cfg.submitted_sample_n)
 
             if job_ids:
                 tasks = [
-                    asyncio.create_task(
-                        _communicater_one(
-                            job_id=job_id,
-                            store=store,
-                            ml=ml,
-                            cfg=cfg,
-                            sem=sem,
-                            create_asset_uc=create_asset_uc,
-                        )
-                    )
-                    for job_id in job_ids
+                    asyncio.create_task(_watchdog_one(
+                        job_id=job_id, store=store, cfg=cfg, sem=sem
+                    )) for job_id in job_ids
                 ]
                 await asyncio.gather(*tasks, return_exceptions=True)
 
             await asyncio.sleep(cfg.poll_interval_seconds)
     finally:
-        await ml.aclose()
         await r.aclose()
-        _log("worker stopped")
-
+        _log("Watchdog worker stopped.")
 
 def build_config() -> CommunicaterConfig:
     return CommunicaterConfig(
         redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
         key_prefix=os.getenv("REDIS_KEY_PREFIX", "bass:"),
         submitted_sample_n=int(os.getenv("COMM_SUBMITTED_SAMPLE_N", "20")),
-        poll_interval_seconds=float(os.getenv("COMM_POLL_INTERVAL_SECONDS", "2.0")),
-        submitted_timeout_minutes=int(os.getenv("COMM_SUBMITTED_TIMEOUT_MINUTES", "30")),
-        job_ttl_seconds=int(os.getenv("COMM_JOB_TTL_SECONDS", str(60 * 30))),
-        ml_server_base_url=os.getenv("ML_SERVER_URL", "http://localhost:8001"),
-        http_timeout_seconds=float(os.getenv("COMM_HTTP_TIMEOUT_SECONDS", "10.0")),
-        max_concurrent_status_checks=int(os.getenv("COMM_MAX_CONCURRENT_STATUS_CHECKS", "10")),
+        poll_interval_seconds=float(os.getenv("COMM_POLL_INTERVAL_SECONDS", "5.0")),
+        submitted_timeout_minutes=int(os.getenv("COMM_SUBMITTED_TIMEOUT_MINUTES", "15")),
+        job_ttl_seconds=int(os.getenv("COMM_JOB_TTL_SECONDS", "3600")),
     )
-
 
 async def main() -> None:
-    from app.api.v1.deps import get_create_asset_uc
-
-    cfg: CommunicaterConfig = build_config()
-    create_asset_uc: CreateAssetUseCase = get_create_asset_uc()
-
-    await communicater_loop(
-        cfg=cfg,
-        create_asset_uc=create_asset_uc,
-    )
-
+    cfg = build_config()
+    await watchdog_loop(cfg=cfg)
 
 if __name__ == "__main__":
     asyncio.run(main())
