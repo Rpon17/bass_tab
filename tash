@@ -1,0 +1,35 @@
+[33m08b2fd9[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m storage,db완료 ml서버 인증재강화
+[33m6d56dfd[m storage,db완료 ml서버 인증강화
+[33mbed04a3[m storage,db완료 프론트만 수정할예정 require오류로 수정
+[33m8ad256b[m storage,db완료 프론트만 수정할예정 redis 추가
+[33mf4486f8[m storage,db완료 프론트만 수정할예정
+[33m74131c2[m storage,db완료 프론트만 제작하면 됨
+[33m2f55d09[m storage,db완료 프론트만 만지면 됨
+[33mbf09e26[m 정말 다와갑니다 프론트만 만지면됩니다
+[33m537e9f1[m 쿠키수정
+[33m3ee5912[m fix: main과 ml 서버의 .env 파일을 추적에서 완전히 제외
+[33m4590907[m env교체
+[33me9c7276[m main 내부로직 수정
+[33m4d7a340[m create.jsx주소 create_router 맞추기
+[33md017c0d[m 다싱
+[33mf96cdd8[m 돌아온탕아
+[33m422fb3f[m 정말이디
+[33mb58dcb2[m 오리진테스트
+[33m03038cb[m 이번엔진짜다름!
+[33m7ef17f2[m 정말로달라요
+[33m77ba814[m 정말로다릅니다
+[33m2018aeb[m 이번엔진짜다름!
+[33mbeb94e3[m 이번엔정말다르다
+[33me8012fd[m 이번엔진자진자다름
+[33md3e6788[m 이번엔진짜다르다
+[33m3ccec01[m 이번엔다르다
+[33mde0ffe6[m 리얼참참참트루
+[33m6899c69[m 징자징자로
+[33mcbd1b05[m 징자징자
+[33me78d7d5[m 리얼참트루다시
+[33mad94af4[m 진자다시
+[33m8cea3d3[m 진짜수정
+[33mf745547[m txt파일 넣음
+[33mff760c1[m 정말 다시마지막
+[33m5f5dd90[m 진짜 마지막배포
+[33mc55c03a[m 베이스프로젝트 최종커밋
