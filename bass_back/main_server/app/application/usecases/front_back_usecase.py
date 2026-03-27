@@ -11,25 +11,31 @@ class FrontBackUsecase:
             self.base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 
     async def execute(self, query: str) -> list[dict]:
-        raw_data = await self.repository.search_songs_with_results(query=query)
+            raw_data = await self.repository.search_songs_with_results(query=query)
 
-        storage_root = os.getenv("STORAGE_ROOT", "/app/storage") 
+            storage_root = os.getenv("STORAGE_ROOT", "/app/storage") 
 
-        path_keys = [
-            "original_audio_path", "bass_only_path", "bass_removed_path", 
-            "bass_boosted_path", "original_tab_path", "root_tab_path"
-        ]
+            path_keys = [
+                "original_audio_path", "bass_only_path", "bass_removed_path", 
+                "bass_boosted_path", "original_tab_path", "root_tab_path"
+            ]
 
-        for item in raw_data:
-            for key in path_keys:
-                path_value = item.get(key)
-                if path_value and str(path_value).strip():
-                    clean_path = str(path_value).replace("\\", "/")
-                    clean_root = storage_root.replace("\\", "/")
-                    
-                    relative_path = clean_path.replace(clean_root, "").lstrip("/")
-                    
-                    # 최종 URL 조립
-                    item[key] = f"{self.base_url}/files/{relative_path}"
-        
-        return raw_data
+            for item in raw_data:
+                for key in path_keys:
+                    path_value = item.get(key)
+                    if path_value and str(path_value).strip():
+                        # 1. 역슬래시 정리
+                        clean_path = str(path_value).replace("\\", "/")
+                        
+                        # ✅ 2. [추가] 이미 전체 URL(Supabase 등)인 경우, 조립하지 않고 그대로 반환
+                        if clean_path.startswith("http"):
+                            item[key] = clean_path
+                            continue # 다음 키로 넘어감
+
+                        # 3. 로컬 파일 시스템 경로인 경우에만 기존처럼 URL 조립
+                        clean_root = storage_root.replace("\\", "/")
+                        relative_path = clean_path.replace(clean_root, "").lstrip("/")
+                        
+                        item[key] = f"{self.base_url}/files/{relative_path}"
+            
+            return raw_data
