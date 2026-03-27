@@ -125,19 +125,19 @@ async def process_one_job(
     try:
         youtube_url = _safe_strip(getattr(job, "youtube_url", None))
         job, result_id = _ensure_result_id(job=job)
-        await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
-
-        # 경로 설정
+        
+        # [추가] 경로 설정 - ML 서버가 읽을 수 있도록 미리 정의
         supabase_path = f"results/{result_id}/audio/original.mp3"
-        local_path = cfg.storage_root / "results" / result_id / "audio" / "temp_yt.wav"
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        output_dir = f"results/{result_id}/"
 
         # 1. 파일 준비 (유튜브 다운로드 및 Supabase 업로드)
         if youtube_url != "MANUAL_UPLOAD":
-            # [수정] 다운로드 전 URL 검증
             _validate_url(youtube_url)
-
             _log_step(f"유튜브 다운로드 중: {youtube_url}")
+            
+            local_path = cfg.storage_root / "results" / result_id / "audio" / "temp_yt.wav"
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            
             produced = await downloader.download_wav(url=youtube_url, output_path=local_path)
 
             _log_step("Supabase 업로드 중...")
@@ -147,18 +147,32 @@ async def process_one_job(
                     file=f.read(),
                     file_options={"content-type": "audio/mpeg", "upsert": "true"},
                 )
-            _log_step("업로드 완료. 안정화를 위해 대기...")
-            await asyncio.sleep(5.0)
+            _log_step("업로드 완료.")
+            
+            if local_path.exists():
+                os.remove(local_path)
+        else:
+            # [추가] 수동 업로드인 경우, 이미 DB에 경로가 있을 수도 있지만 
+            # 확실하게 하기 위해 supabase_path 형식을 맞춰줍니다.
+            if not getattr(job, "input_wav_path", None):
+                # 수동 업로드 시의 기본 경로 규칙이 있다면 여기 적어줍니다.
+                pass
 
-        # 2. ML 큐에 작업 제출
+        # ⭐ [핵심 수정] Job 객체에 정보를 업데이트합니다!
+        # replace를 사용해 input_wav_path와 output_dir(또는 result_path)를 채워줍니다.
+        job = replace(job, 
+                     input_wav_path=supabase_path, 
+                     output_dir=output_dir)
+
+        # 2. Redis에 업데이트된 Job 저장
+        await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
+
+        # 3. 그 다음에 ML 큐에 작업 제출 (이제 ML 서버가 경로를 읽을 수 있음)
         await ml.submit(job_id=job_id)
 
         job.mark_submitted()
         await store.save(job, ttl_seconds=cfg.job_ttl_seconds)
         await store.add_submitted(job_id)
-
-        if youtube_url != "MANUAL_UPLOAD" and local_path.exists():
-            os.remove(local_path)
 
     except Exception as e:
         traceback.print_exc()

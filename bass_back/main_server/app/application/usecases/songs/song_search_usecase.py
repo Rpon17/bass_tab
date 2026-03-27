@@ -7,7 +7,6 @@ from app.application.ports.song_repository_port import SongRepositoryPort
 from app.application.services.text_normalize import normalize_text
 from app.domain.songs_domain import Song
 
-
 @dataclass(frozen=True)
 class SearchSongsUseCase:
     song_repository: SongRepositoryPort
