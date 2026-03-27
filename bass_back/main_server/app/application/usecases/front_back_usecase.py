@@ -24,15 +24,14 @@ class FrontBackUsecase:
                 for key in path_keys:
                     path_value = item.get(key)
                     if path_value and str(path_value).strip():
-                        # 1. 역슬래시 정리
                         clean_path = str(path_value).replace("\\", "/")
                         
-                        # ✅ 2. [추가] 이미 전체 URL(Supabase 등)인 경우, 조립하지 않고 그대로 반환
+                        
                         if clean_path.startswith("http"):
                             item[key] = clean_path
                             continue # 다음 키로 넘어감
 
-                        # 3. 로컬 파일 시스템 경로인 경우에만 기존처럼 URL 조립
+                    
                         clean_root = storage_root.replace("\\", "/")
                         relative_path = clean_path.replace(clean_root, "").lstrip("/")
                         
