@@ -1,18 +1,20 @@
 #!/bin/bash
 
-# 1. 현재 폴더 위치를 파이썬 경로에 추가 (main_server 내의 app 폴더 인식)
+# 1. 경로 설정
 export PYTHONPATH=$PYTHONPATH:$(pwd)
 
-echo "[System] Starting Workers..."
+echo "[System] 서비스 기동 시퀀스 시작..."
 
-# 2. submit_worker 실행 
-python app/worker/submit_worker.py &
+# 2. submit_worker 실행 & 로그 강제 출력
+echo "[System] Submit Worker 기동 중..."
+stdbuf -oL python app/worker/submit_worker.py 2>&1 | sed "s/^/[SUBMIT] /" &
 
-# 3. communicate_worker 실행 
-# (ML 서버가 분석 끝냈다는 소식을 듣고 DB를 업데이트하는 역할)
-python app/worker/communicate_worker.py &
+# 3. communicate_worker 실행 & 로그 강제 출력
+echo "[System] Communicate Worker 기동 중..."
+stdbuf -oL python app/worker/communicate_worker.py 2>&1 | sed "s/^/[COMMUNICATE] /" &
 
-echo "[System] Starting API Server..."
+sleep 2
 
+echo "[System] API Server 실행..."
 # 4. 메인 API 서버 실행
-uvicorn app.main:app --host 0.0.0.0 --port 10000 --proxy-headers
+exec uvicorn app.main:app --host 0.0.0.0 --port 10000 --proxy-headers
