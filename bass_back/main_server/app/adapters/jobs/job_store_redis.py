@@ -35,7 +35,10 @@ class RedisJobStore(JobStore):
 
     def _submitted_key(self) -> str:
         return f"{self._p}ml:submitted"
-
+    
+    def _ml_job_key(self, job_id: str) -> str:
+        return f"{self._p}ml:job:{job_id}"
+    
     @staticmethod
     def _dt_to_str(dt: datetime) -> str:
         return dt.isoformat()
@@ -130,11 +133,21 @@ class RedisJobStore(JobStore):
         await pipe.execute()
 
     async def get(self, job_id: str) -> Optional[Job]:
-        jid: str = (job_id or "").strip()
+        jid: str = (job_id).strip()
         if not jid:
             return None
 
         h: Dict[Any, Any] = await self._r.hgetall(self._job_key(jid))
+        if not h:
+            return None
+        return self._deserialize_job(h)
+    
+    async def get_ml(self, job_id: str) -> Optional[Job]:
+        jid: str = (job_id).strip()
+        if not jid:
+            return None
+
+        h: Dict[Any, Any] = await self._r.hgetall(self._ml_job_key(jid))
         if not h:
             return None
         return self._deserialize_job(h)

@@ -31,10 +31,10 @@ class CreateAssetUseCase:
         asset: Asset = Asset(
             asset_id=asset_id,
             result_id=result_id,
-            original_audio_path=audio_path(base_path,asset_id, "original.wav"),
-            bass_only_path=audio_path(base_path,asset_id, "bass_only.wav"),
-            bass_removed_path=audio_path(base_path,asset_id, "bass_removed.wav"),
-            bass_boosted_path=audio_path(base_path,asset_id, "bass_boosted.wav"),
+            original_audio_path=audio_path(base_path,asset_id, "original.mp3"),
+            bass_only_path=audio_path(base_path,asset_id, "bass_only.mp3"),
+            bass_removed_path=audio_path(base_path,asset_id, "bass_removed.mp3"),
+            bass_boosted_path=audio_path(base_path,asset_id, "bass_boosted.mp3"),
             original_tab_path=tab_path(base_path,asset_id, "original_tab.json"),
             root_tab_path=tab_path(base_path,asset_id, "root_tab.json"),
         )
