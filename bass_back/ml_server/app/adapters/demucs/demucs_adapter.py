@@ -67,15 +67,14 @@ class DemucsAdapter(DemucsPort):
         _log_step(f"📥 다운로드 대상: {target_url}")
         local_temp_raw = local_stem_dir / "input_raw.wav"
         
-        # [수정 완료] Handler 인자 이름을 url로 맞춤
         success_download = await self.handler.download_wav_from_url(
             target_url, 
             local_temp_raw,
-            max_retries=10 
+            max_retries=30 
         )
         if not success_download:
             raise RuntimeError(f"파일 다운로드 실패: {target_url}")
-
+        
         # 3. [Demucs] 음원 분리 실행
         _log_step(f"⏳ Demucs 분석 중... (Model: {setting.demucs_model})")
         model, samplerate, channels = self._load_model(demucs_model=setting.demucs_model)
@@ -127,7 +126,7 @@ class DemucsAdapter(DemucsPort):
         if not base_output_url.startswith("http"):
             base_output_url = f"{self.handler.base_url}/{base_output_url.lstrip('/')}"
         
-        asset_audio_upload_dir = f"{base_output_url}/asset/{asset_id}/audio"
+        asset_audio_upload_dir = f"{base_output_url}/assets/{asset_id}/audio"
         
         final_upload_map = {
             "original.mp3": local_original_mp3,

@@ -99,7 +99,7 @@ class OriginalTabGenerateAdapter(OriginalTabGeneratePort):
         payload = self._create_json_payload(bars=bars)
 
         # 5. 업로드 목적지 URL 구성 및 업로드
-        target_upload_url = f"{output_dir.rstrip('/')}/asset/{asset_id}/tab/{self.output_filename}"
+        target_upload_url = f"{output_dir.rstrip('/')}/assets/{asset_id}/tab/{self.output_filename}"
         
         _log_step(f"📤 결과 업로드 중... ({target_upload_url})")
 

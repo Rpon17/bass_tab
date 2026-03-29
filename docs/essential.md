@@ -120,7 +120,7 @@ python main_server/app/worker/youtube_worker.py
 깃허브 
 
 git add .
-git commit -m "로컬 테스트 완료 song_get 최종수정"
+git commit -m "최종 배포시작"
 git push origin main
 
 선언한 이름들

@@ -25,7 +25,7 @@ QUEUE_NAME: str = "ml:process"
 
 
 async def get_redis() -> redis.Redis:
-    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    redis_url: str = os.getenv("REDIS_URL",)
     return redis.from_url(redis_url, decode_responses=True)
 
 
@@ -41,19 +41,6 @@ async def submit_process(
     job_prefix = os.getenv("ML_JOB_KEY_PREFIX", "bass:ml:")
     store: RedisJobStore = RedisJobStore(r, key_prefix=job_prefix)
 
-    # 💡 [핵심 수정] URL과 로컬 경로를 구분하여 처리합니다.
-    def safe_path(p: str | None) -> str:
-        if not p:
-            return ""
-        # http로 시작하는 URL은 resolve()를 호출하면 Windows 경로와 꼬이므로 그대로 반환합니다.
-        if p.strip().lower().startswith("http"):
-            return p.strip()
-        # 로컬 경로인 경우에만 절대 경로로 변환합니다.
-        return str(Path(p).resolve())
-
-    # 입력 및 출력 경로 처리
-    processed_input_wav = safe_path(request.input_wav_path)
-    processed_result_path = safe_path(request.result_path)
 
     existing: MLJob | None = await store.get(request.job_id)
 
@@ -65,7 +52,7 @@ async def submit_process(
             result_id=existing.result_id,
             asset_id=existing.asset_id or "",
             status=existing.status.value if isinstance(existing.status, MLJobStatus) else str(existing.status),
-            path=existing.output_dir or processed_result_path,
+            path=existing.output_dir,
             error=existing.error,
         )
 
@@ -79,9 +66,9 @@ async def submit_process(
         job_id=request.job_id,
         song_id=request.song_id,
         result_id=request.result_id,
-        input_wav_path=processed_input_wav,
-        output_dir=processed_result_path,
-        result_path=processed_result_path,
+        input_wav_path=request.input_wav_path,
+        output_dir=request.result_path,
+        result_path=request.result_path,
         asset_id=asset_id,
         status=MLJobStatus.QUEUED,
         progress=0,
@@ -103,6 +90,6 @@ async def submit_process(
         result_id=job.result_id,
         asset_id=job.asset_id or "",
         status=job.status.value if isinstance(job.status, MLJobStatus) else str(job.status),
-        path=processed_result_path,
+        path=job.result_path,
         error=None,
     )

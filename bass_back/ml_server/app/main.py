@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from app.api.v1.routers.process_router import router as process_router
 from app.api.v1.routers.status import router as status_router
-
+from app.api.v1.routers.get_job_router import router as get_job_router
 app: FastAPI = FastAPI(title="bass-ml-server")
 
 # ML process API
@@ -13,6 +13,7 @@ app.include_router(process_router)
 # ML status API
 app.include_router(status_router)
 
+app.include_router(get_job_router)
 
 @app.get("/")
 async def root() -> dict[str, str]:

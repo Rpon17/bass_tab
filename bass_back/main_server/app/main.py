@@ -21,6 +21,8 @@ def create_app() -> FastAPI:
         "http://localhost:5173",
         "https://bass-project-front-react.onrender.com",
         "https://bass-project-front-react.onrender.com/",
+        "https://rpon17-bass-project-front.onrender.com", 
+        "https://rpon17-bass-project-front.onrender.com/",
         "https://bass-main-server.onrender.com",
         "https://bass-main-server.onrender.com/",
     ]

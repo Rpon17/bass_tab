@@ -108,9 +108,10 @@ class RunMLProcessUseCase:
         else:
             print(f"[USECASE] 기존 asset_id 사용 asset_id={job.asset_id}")
 
-        base_url = str(job.output_dir).rstrip("/")
+        base_url = str(job.result_path).rstrip("/")
         
 
+        
         print("[USECASE] job 조회 완료")
 
         try:
@@ -122,14 +123,17 @@ class RunMLProcessUseCase:
 
             stage = "demucs"
             print("[USECASE] demucs 시작")
-            print(f"[USECASE] output_dir={ base_url}")
+            print(f"[USECASE] 원본음악 위치={job.input_wav_path} ")
+            print(f"[USECASE] result_path={job.result_path} ")
+            print(f"[USECASE] output_dir={job.output_dir} ")
+            print(f"[USECASE] base_url={base_url}")
             print(f"[USECASE] job.asset_id={job.asset_id}")
 
             bass_only_wav_path: Path = await self.demucs_port.split(
                 input_wav_path=job.input_wav_path,
-                output_dir=base_url,
                 temp_dir=storage_root,
                 asset_id=job.asset_id,
+                output_dir=base_url,
                 setting=DemucsSplitSetting(
                     boosted_volume_db=10.0,
                     demucs_model="htdemucs",
@@ -285,7 +289,7 @@ class RunMLProcessUseCase:
             original_tab_success: bool = await self.original_tab_generate_port.tab_generate(
                 original_json=viterbi_steps,
                 bpm=int(bpm),
-                output_dir=str(job.output_dir),
+                output_dir=base_url,
                 asset_id=job.asset_id,
             )
             print(f"[USECASE] original tab 완료 여부: {original_tab_success}")
@@ -295,7 +299,7 @@ class RunMLProcessUseCase:
             root_tab_success: Path = await self.root_tab_generate_adapter.tab_generate(
                 original_json=root_notes,
                 bpm=int(bpm),
-                output_dir=str(job.output_dir),
+                output_dir=base_url,
                 asset_id=job.asset_id,
             )
             print("[USECASE] root tab 생성 끝")

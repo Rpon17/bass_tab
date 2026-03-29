@@ -23,15 +23,14 @@ class SupabaseAudioHandler:
 
     def _get_relative_path(self, full_url: str) -> str:
         full_url = str(full_url)
-        target = "results/"
-        if target in full_url:
-            return target + full_url.split(target)[-1].strip("/")
-        if self.base_url and self.base_url in full_url:
-            return full_url.replace(self.base_url, "").strip("/")
-        return full_url.split("/")[-1]
+        bucket_part = f"/{self.bucket_name}/"
+        if bucket_part in full_url:
+            return full_url.split(bucket_part)[-1].strip("/")
 
-    async def download_wav_from_url(self, url: str = None, local_path: Path = None, max_retries: int = 10, **kwargs) -> bool:
-        # 호출자가 url 대신 target_url로 보내도 받아줍니다.
+        return full_url.split("/")[-1]  
+
+
+    async def download_wav_from_url(self, url: str = None, local_path: Path = None, max_retries: int = 30, **kwargs) -> bool:
         actual_url = url or kwargs.get("target_url")
         actual_path = local_path or kwargs.get("local_path")
 
@@ -54,6 +53,7 @@ class SupabaseAudioHandler:
                     await asyncio.sleep(2)
             return False
 
+
     async def upload_to_supabase_url(self, local_path: Path, target_supabase_url: str) -> bool:
         try:
             if not local_path.exists(): return False
@@ -73,6 +73,7 @@ class SupabaseAudioHandler:
             return True
         except Exception as e:
             print(f"[handler] ❌ 업로드 예외: {e}"); return False
+            
             
     async def upload_json_to_supabase(self, payload: list[dict] | dict, target_supabase_url: str) -> bool:
             """
