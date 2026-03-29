@@ -8,8 +8,8 @@ function Landing() {
       height: '100vh', display: 'flex', flexDirection: 'column', 
       justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' 
     }}>
-      <h1 style={{ fontSize: '3rem', marginBottom: '20px' }}>Bass Master AI</h1>
-      <p style={{ color: '#666', marginBottom: '40px' }}>당신만의 베이스 악보와 함께 꿈을 연주하세요</p>
+      <h1 style={{ fontSize: '3rem', marginBottom: '20px' }}>거위의 합주실</h1>
+      <p style={{ color: '#666', marginBottom: '40px' }}>당신만의 악보와 함께 꿈을 연주하세요</p>
       <button 
         onClick={() => navigate('/home')}
         style={{

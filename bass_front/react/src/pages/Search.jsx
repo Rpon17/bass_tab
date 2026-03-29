@@ -1,21 +1,21 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+import waitingImg1 from '../images/찾는거위.jpg';
+
 function Search() {
   const [query, setQuery] = useState(''); 
   const [results, setResults] = useState([]);
-  const [isLoading, setIsLoading] = useState(false); // 로딩 상태 관리
+  const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
 
   const API_BASE_URL = "https://rpon17-bass-project-main.onrender.com";
 
-  // 검색 로직
   const handleSearch = async () => {
     if (!query.trim()) return; 
 
-    setIsLoading(true); // 검색 시작 시 로딩 표시
+    setIsLoading(true);
     try {
-      // ✅ 검색어 인코딩 처리 및 API 호출
       const response = await fetch(`${API_BASE_URL}/v1/songs/search?q=${encodeURIComponent(query)}`);
       
       if (!response.ok) {
@@ -24,7 +24,6 @@ function Search() {
 
       const data = await response.json();
 
-      // ✅ 중복 제거 로직 (제목-가수 조합)
       const uniqueResults = Array.from(
         new Map(data.map(song => [`${song.title}-${song.artist}`, song])).values()
       );
@@ -34,12 +33,11 @@ function Search() {
       console.error("검색 중 오류 발생:", error);
       alert("백엔드 서버와 연결할 수 없습니다. 잠시 후 다시 시도해주세요.");
     } finally {
-      setIsLoading(false); // 로딩 종료
+      setIsLoading(false);
     }
   };
 
   const goToPlayer = (song) => {
-    // 분석이 완료된 곡만 플레이어로 보낼지, 혹은 진행 중인 곡도 보낼지 결정 가능
     navigate(`/player/${song.song_id}`, { state: { songData: song } });
   };
 
@@ -53,10 +51,9 @@ function Search() {
       </div>
 
       <div style={{ textAlign: 'center' }}>
-        <h2 style={{ marginBottom: '20px' }}>노래 검색</h2>
         
         {/* 검색창 영역 */}
-        <div style={{ marginBottom: '30px', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'center' }}>
           <input 
             type="text" 
             value={query}
@@ -74,7 +71,7 @@ function Search() {
           </button>
         </div>
 
-        {/* 리스트 출력 영역 */}
+        {/* 리스트 및 안내 영역 */}
         <div style={{ display: 'inline-block', textAlign: 'left', width: '100%', maxWidth: '500px' }}>
           {results.length > 0 ? (
             results.map((song) => (
@@ -91,7 +88,6 @@ function Search() {
                     <div style={{ fontSize: '0.9rem', color: '#666', marginTop: '3px' }}>{song.artist}</div>
                   </div>
                   
-                  {/* ✅ 상태값에 따른 뱃지 (DB 값에 따라 'done' 또는 'SUCCESS' 등으로 수정 필요) */}
                   <div style={{ 
                     ...statusBadgeStyle,
                     backgroundColor: (song.status === 'done' || song.status === 'SUCCESS') ? '#eef2ff' : '#fff7ed',
@@ -105,14 +101,33 @@ function Search() {
             ))
           ) : (
             !isLoading && (
-              <div style={{ textAlign: 'center', marginTop: '50px' }}>
-                <p style={{ color: '#999', fontSize: '1.1rem' }}>검색 결과가 없습니다.</p>
-                <p style={{ color: '#999', fontSize: '0.7rem' }}>새로운 곡을 추가해보세요!</p>
+              <div style={{ textAlign: 'center', marginTop: '10px' }}>
+                {/* 검색바와 밀착된 문구 */}
+                <p style={{ color: '#100', fontSize: '1.1rem', marginBottom: '10px' }}>
+                  거위가 악보리스트를 찾고있습니다
+                </p>
+
+                {/* 거위 이미지 - 아래 문구와 멀어지도록 marginBottom을 크게 설정 */}
+                <img 
+                  src={waitingImg1}
+                  alt="Goose looking for tabs"
+                  style={{ 
+                    width: '400px',    
+                    height: 'auto', 
+                    borderRadius: '15px',
+                    marginBottom: '60px' 
+                  }} 
+                />
+
+                {/* 하단 버튼 그룹 - 서로 가깝게 배치 */}
+                <p style={{ color: '#99', fontSize: '1.1rem', marginBottom: '5px' }}>
+                  찾는 노래가 없다면?
+                </p>
                 <button 
                   onClick={() => navigate('/create')}
                   style={createLinkStyle}
                 >
-                  직접 악보 제작하기
+                  거위와 악보 만들러가기
                 </button>
               </div>
             )
@@ -181,12 +196,12 @@ const statusBadgeStyle = {
 };
 
 const createLinkStyle = { 
-  marginTop: '10px', 
   color: '#0066cc', 
   border: 'none', 
   background: 'none', 
   cursor: 'pointer', 
-  textDecoration: 'underline' 
+  textDecoration: 'underline',
+  fontSize: '1rem'
 };
 
 export default Search;

@@ -1,144 +1,112 @@
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+
+// 요청하신 대로 이미지 매칭
+import guitarImg from '../images/여행가는거위.jpg'; // YouTube용
+import searchImg from '../images/요원거위.png'; // 업로드용
 
 function Create() {
   const navigate = useNavigate();
-  
-  // 1. 상태 관리: input의 name 속성과 formData의 키값이 일치해야 함
-  const [formData, setFormData] = useState({
-    youtube_url: '',
-    title: '',
-    artist: ''
-  });
-
-  const [isLoading, setIsLoading] = useState(false);
-
-  // 2. 입력 핸들러
-  const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData({
-      ...formData,
-      [name]: value
-    });
-  };
-
-  // 3. 폼 제출 핸들러 (중복 방지 로직 포함)
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    // [중복 방지] 이미 요청 중이면 함수 실행 중단
-    if (isLoading) return; 
-
-    setIsLoading(true);
-
-    try {
-      // ✅ Render에 배포된 백엔드 주소로 변경!
-      const response = await fetch('https://bass-main-server.onrender.com/v1/jobs', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json' 
-        },
-        body: JSON.stringify(formData),
-      });
-
-      if (response.status === 201 || response.ok) {
-        alert("악보 생성이 요청되었습니다! (Job ID 발급 완료)");
-        
-        // [중복 방지] 성공 후 입력 폼 초기화
-        setFormData({ youtube_url: '', title: '', artist: '' });
-        
-        // 생성 후 검색 리스트 페이지로 이동
-        navigate('/search'); 
-      } else {
-        const errorDetail = await response.json();
-        alert(`생성 실패: ${errorDetail.detail || "서버 오류"}`);
-      }
-    } catch (error) {
-      console.error("통신 오류:", error);
-      alert("서버 연결에 실패했습니다. Render 서버가 켜져 있는지 확인하세요.");
-    } finally {
-      // 요청 완료 후 로딩 상태 해제
-      setIsLoading(false);
-    }
-  };
 
   return (
-    <div style={{ padding: '20px', backgroundColor: 'white', minHeight: '100vh' }}>
+    <div style={{ padding: '40px 20px', textAlign: 'center', minHeight: '100vh', backgroundColor: '#fff' }}>
       
       {/* 상단 네비게이션 */}
-      <div style={{ display: 'flex', gap: '15px', marginBottom: '30px' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-start', gap: '15px', marginBottom: '30px' }}>
         <button onClick={() => navigate('/home')} style={btnStyle}>🏠 Home</button>
         <button onClick={() => navigate(-1)} style={btnStyle}>⬅️ Back</button>
       </div>
 
-      <div style={{ maxWidth: '450px', margin: '0 auto', border: '1px solid #ddd', padding: '30px', borderRadius: '15px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
-        <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>🎸 새로운 악보 제작</h2>
-        <p style={{ fontSize: '0.9rem', color: '#666', textAlign: 'center', marginBottom: '25px' }}>
-          유튜브 링크를 기반으로 AI가 베이스 악보를 생성합니다.
-        </p>
-
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          
-          <div>
-            <label style={labelStyle}>YouTube URL</label>
-            <input 
-              name="youtube_url" 
-              type="url"
-              placeholder="https://www.youtube.com/watch?v=..."
-              value={formData.youtube_url} 
-              onChange={handleChange} 
-              style={inputStyle} 
-              required 
-            />
+      <h2 style={{ marginBottom: '50px', fontSize: '2.2rem', fontWeight: 'bold' }}>
+        악보 제작 방식 선택
+      </h2>
+      
+      <div style={{ display: 'flex', justifyContent: 'center', gap: '40px', flexWrap: 'wrap' }}>
+        
+        {/* YouTube 링크로 생성 카드 */}
+        <div 
+          onClick={() => navigate('/create/youtube')}
+          style={cardStyle}
+          onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+          onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
+        >
+          <div style={iconWrapperStyle}>
+            <img src={guitarImg} alt="YouTube 생성" style={imageStyle} />
           </div>
+          <h3 style={titleStyle}>YouTube 링크로 생성</h3>
+          <p style={descStyle}>유튜브 URL을 입력하여<br/>악보를 제작합니다.</p>
+        </div>
 
-          <div>
-            <label style={labelStyle}>노래 제목</label>
-            <input 
-              name="title" 
-              type="text"
-              placeholder="노래 제목을 입력하세요"
-              value={formData.title} 
-              onChange={handleChange} 
-              style={inputStyle} 
-              required 
-            />
+        {/* 직접 파일 업로드 카드 */}
+        <div 
+          onClick={() => navigate('/create/upload')}
+          style={cardStyle}
+          onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.02)'}
+          onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
+        >
+          <div style={iconWrapperStyle}>
+            <img src={searchImg} alt="파일 업로드" style={imageStyle} />
           </div>
+          <h3 style={titleStyle}>직접 파일 업로드</h3>
+          <p style={descStyle}>MP3, WAV 파일을<br/>직접 올려서 제작합니다.</p>
+        </div>
 
-          <div>
-            <label style={labelStyle}>아티스트</label>
-            <input 
-              name="artist" 
-              type="text"
-              placeholder="아티스트(가수) 이름을 입력하세요"
-              value={formData.artist} 
-              onChange={handleChange} 
-              style={inputStyle} 
-              required 
-            />
-          </div>
-
-          <button 
-            type="submit" 
-            disabled={isLoading} 
-            style={{
-              ...submitStyle,
-              backgroundColor: isLoading ? '#999' : '#000',
-              cursor: isLoading ? 'not-allowed' : 'pointer'
-            }}
-          >
-            {isLoading ? 'AI 분석 요청 중...' : '악보 생성 시작하기'}
-          </button>
-        </form>
       </div>
     </div>
   );
 }
 
-// 스타일 정의
-const labelStyle = { display: 'block', marginBottom: '5px', fontWeight: 'bold', fontSize: '0.9rem' };
-const inputStyle = { width: '100%', padding: '12px', boxSizing: 'border-box', border: '1px solid #ccc', borderRadius: '8px', outline: 'none' };
-const btnStyle = { padding: '8px 15px', cursor: 'pointer', border: '1px solid #000', borderRadius: '5px', backgroundColor: '#fff', fontSize: '0.9rem' };
-const submitStyle = { padding: '15px', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '1rem', marginTop: '10px', transition: 'background 0.3s' };
+// --- 스타일 객체 (Home 컴포넌트의 스타일 유지) ---
+
+const btnStyle = { 
+  padding: '8px 15px', 
+  cursor: 'pointer', 
+  border: '1px solid #000', 
+  borderRadius: '8px', 
+  backgroundColor: '#f5f5f5', 
+  fontSize: '0.9rem',
+  fontWeight: 'bold'
+};
+
+const cardStyle = {
+  width: '350px',          
+  padding: '50px 20px', 
+  border: '2px solid #000', 
+  borderRadius: '30px',
+  cursor: 'pointer', 
+  transition: 'transform 0.2s ease-in-out', 
+  textAlign: 'center',
+  backgroundColor: '#fff',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center'
+};
+
+const iconWrapperStyle = {
+  width: '180px',           
+  height: '180px',          
+  marginBottom: '20px',
+  display: 'flex',
+  justifyContent: 'center',
+  alignItems: 'center',
+  overflow: 'hidden'        
+};
+
+const imageStyle = {
+  width: '100%',           
+  height: '100%',           
+  objectFit: 'contain'     
+};
+
+const titleStyle = {
+  fontSize: '1.7rem',
+  margin: '10px 0',
+  fontWeight: 'bold'
+};
+
+const descStyle = {
+  fontSize: '1.1rem',
+  color: '#555',
+  lineHeight: '1.5'
+};
 
 export default Create;

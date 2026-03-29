@@ -27,7 +27,7 @@ function Home() {
             <img src={guitarImg} alt="노래 제작" style={imageStyle} />
           </div>
           <h3 style={titleStyle}>노래 제작</h3>
-          <p style={descStyle}>YouTube URL로<br/>새로운 악보 생성</p>
+          <p style={descStyle}>원하는 곡으로<br/>새로운 악보 생성</p>
         </div>
 
         {/* 노래 검색 카드: 클릭 시 /search 페이지로 이동 */}
@@ -41,7 +41,7 @@ function Home() {
             <img src={searchImg} alt="노래 검색" style={imageStyle} />
           </div>
           <h3 style={titleStyle}>노래 검색</h3>
-          <p style={descStyle}>이미 생성된<br/>악보 찾아보기</p>
+          <p style={descStyle}>이미 생성된<br/>악보 검색</p>
         </div>
 
       </div>
